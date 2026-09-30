@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from .actions import InvalidAction, validate
 from .agent_client import AgentClient, CallError, CommandResult
 from .config import Settings
-from .db import Database
+from .db import RESULT_STATUSES, Database
 from .models import JobDetail, JobResult, JobSummary
 from .registry import Node
 
@@ -212,16 +212,10 @@ class JobService:
                  p.exit_code, r.duration_ms, truncated)
 
     async def _refresh_status(self, job_id: str) -> None:
-        job = await self.db.get_job_row(job_id)
-        if job is None:
-            return
-        if job["status"] == "INTERRUPTED":
-            # SPEC §8: INTERRUPTED는 reconcile 후에도 유지한다 (중단 이력 보존). 대상별 결과만 갱신된다.
-            return
-        status = compute_job_status(await self.db.counts(job_id))
-        finished_at = None if status == "RUNNING" else utc_now_iso()
-        await self.db.set_job_status(job_id, status, finished_at)
-        log.info("event=job_status job_id=%s status=%s", job_id, status)
+        # 집계와 쓰기를 결과 갱신과 직렬화한다. INTERRUPTED는 유지한다 (SPEC §8, 중단 이력 보존).
+        status = await self.db.refresh_job_status(job_id, compute_job_status, utc_now_iso())
+        if status is not None:
+            log.info("event=job_status job_id=%s status=%s", job_id, status)
 
     # ------------------------------------------------------------ reconcile
 
@@ -308,7 +302,10 @@ class JobService:
         if j is None:
             return None
         results = await self.db.get_results(job_id)
-        counts = await self.db.counts(job_id)
+        # counts는 반환하는 results에서 계산한다 (별도 집계 쿼리는 다른 시점을 볼 수 있다)
+        counts = dict.fromkeys(RESULT_STATUSES, 0)
+        for r in results:
+            counts[r["status"]] = counts.get(r["status"], 0) + 1
         return JobDetail(**self._summary_fields(j, counts), results=[self._result_view(r) for r in results])
 
     async def stop(self) -> None:

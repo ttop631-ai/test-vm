@@ -20,10 +20,15 @@ ErrorType = Literal["CONNECT_ERROR", "TIMEOUT", "AGENT_ERROR", "EXEC_ERROR"]
 
 # ---------------------------------------------------------------- agent 응답
 
+# 0~100의 유한값만 허용한다. NaN은 모든 임계치 비교가 거짓이라 '정상'으로 판정되고,
+# API에서는 null로 직렬화되어 대시보드가 깨진다 (SPEC §6: 스키마 불일치 → AGENT_ERROR).
+Percent = Annotated[float, Field(ge=0, le=100, allow_inf_nan=False)]
+
+
 class Metrics(BaseModel):
-    cpu_pct: float
-    mem_pct: float
-    disk_pct: float
+    cpu_pct: Percent
+    mem_pct: Percent
+    disk_pct: Percent
 
 
 class DaemonInfo(BaseModel):

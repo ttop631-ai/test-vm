@@ -149,6 +149,9 @@ class Poller:
         try:
             async with self._sem:
                 attempted_at = utc_now()
+                # 응답을 기다리기 전에 기록한다. 응답 후에야 기록하면 진행 중인 수집을
+                # 오래된 시도(stale)로 판정할 수 있다 (긴 read timeout, 동시성 대기).
+                state.last_attempt_at = attempted_at
                 result = await self.client.get_health(node)
             state.apply(result, attempted_at)
             self._evaluate(state, utc_now())

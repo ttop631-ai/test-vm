@@ -180,7 +180,10 @@ class LoginLimiter:
 
     def fail(self, ip: str) -> None:
         count, until = self._state.get(ip, (0, 0.0))
-        if until and until <= time.monotonic():
+        if until > time.monotonic():
+            # 차단 중: 차단 전에 시작된 병렬 요청의 늦은 실패가 차단을 풀거나 바꾸지 않게 한다 (SPEC §8)
+            return
+        if until:
             count = 0  # 차단이 풀린 뒤에는 처음부터 센다
         count += 1
         if len(self._state) >= self.MAX_TRACKED and ip not in self._state:

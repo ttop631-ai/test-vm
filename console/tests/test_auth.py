@@ -71,6 +71,23 @@ def test_limiter_locks_after_max_failures_and_unlocks(monkeypatch):
     assert lim.locked_for("1.2.3.4") == 0
 
 
+def test_late_failure_during_lockout_keeps_lock(monkeypatch):
+    """차단 전에 시작한 병렬 인증이 차단 뒤 늦게 실패해도 차단이 풀리면 안 된다 (병렬 요청으로 차단 우회)."""
+    clock = patch_clock(monkeypatch)
+    lim = LoginLimiter(max_failures=3, lockout_sec=60)
+    for _ in range(3):
+        lim.fail("1.2.3.4")
+    assert lim.locked_for("1.2.3.4") > 0
+    lim.fail("1.2.3.4")  # 늦게 도착한 실패
+    lim.fail("1.2.3.4")
+    assert lim.locked_for("1.2.3.4") > 0
+    clock.t += 30
+    lim.fail("1.2.3.4")
+    assert 0 < lim.locked_for("1.2.3.4") <= 31  # 차단 시각을 바꾸지 않는다 (연장도 단축도 없음)
+    clock.t += 31
+    assert lim.locked_for("1.2.3.4") == 0
+
+
 def test_limiter_reset_on_success(monkeypatch):
     patch_clock(monkeypatch)
     lim = LoginLimiter(max_failures=3, lockout_sec=60)

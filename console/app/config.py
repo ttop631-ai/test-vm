@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings
 
 _DEFAULT_NODES_FILE = Path(__file__).resolve().parent.parent / "nodes.json"
@@ -31,30 +31,38 @@ class Settings(BaseSettings):
     # 저장소 (SPEC §9)
     db_path: Path = Path("/data/nodewatch.db")
 
-    # 타임아웃·동시성 예산 (SPEC §5)
-    poll_interval_sec: float = 5.0
-    health_connect_timeout: float = 1.0
-    health_read_timeout: float = 3.0
-    slow_ms: int = 1500
-    poll_concurrency: int = 20
-    fail_threshold: int = 3
-    stale_factor: float = 3.0
+    # 타임아웃·동시성 예산 (SPEC §5). 범위를 벗어나면 기동을 거부한다 (§5 규칙 7):
+    # 동시성 0은 수집·job을 영구 대기시키고, 주기 0은 busy loop, 타임아웃 0은 모든 호출을 실패시킨다.
+    poll_interval_sec: float = Field(default=5.0, gt=0, allow_inf_nan=False)
+    health_connect_timeout: float = Field(default=1.0, gt=0, allow_inf_nan=False)
+    health_read_timeout: float = Field(default=3.0, gt=0, allow_inf_nan=False)
+    slow_ms: int = Field(default=1500, ge=1)
+    poll_concurrency: int = Field(default=20, ge=1)
+    fail_threshold: int = Field(default=3, ge=1)
+    stale_factor: float = Field(default=3.0, gt=0, allow_inf_nan=False)
     # idle 연결 재사용 상한. 수집 주기 < 이 값 < agent keep-alive(30s) (SPEC §5)
-    http_keepalive_expiry: float = 15.0
-    cmd_connect_timeout: float = 2.0
-    cmd_read_timeout: float = 15.0
-    job_concurrency: int = 10
-    output_max_bytes: int = 65536
+    http_keepalive_expiry: float = Field(default=15.0, gt=0, allow_inf_nan=False)
+    cmd_connect_timeout: float = Field(default=2.0, gt=0, allow_inf_nan=False)
+    cmd_read_timeout: float = Field(default=15.0, gt=0, allow_inf_nan=False)
+    job_concurrency: int = Field(default=10, ge=1)
+    output_max_bytes: int = Field(default=65536, ge=1)
     samples_max: int = Field(default=60, ge=1, le=17280)  # 노드별 메모리 샘플 수 (60 × 5s = 5분)
     events_retention_days: int = Field(default=30, ge=1)  # 상태 전이 이벤트 보관 기간 (SPEC §4.4)
 
-    # 메트릭 임계치 (SPEC §4.3)
-    cpu_warn_pct: float = 80
-    cpu_crit_pct: float = 95
-    mem_warn_pct: float = 85
-    mem_crit_pct: float = 95
-    disk_warn_pct: float = 80
-    disk_crit_pct: float = 90
+    # 메트릭 임계치 (SPEC §4.3). 0~100, WARNING < CRITICAL
+    cpu_warn_pct: float = Field(default=80, ge=0, le=100)
+    cpu_crit_pct: float = Field(default=95, ge=0, le=100)
+    mem_warn_pct: float = Field(default=85, ge=0, le=100)
+    mem_crit_pct: float = Field(default=95, ge=0, le=100)
+    disk_warn_pct: float = Field(default=80, ge=0, le=100)
+    disk_crit_pct: float = Field(default=90, ge=0, le=100)
+
+    @model_validator(mode="after")
+    def _thresholds_ordered(self) -> Settings:
+        for key, (warn, crit) in self.thresholds().items():
+            if not warn < crit:
+                raise ValueError(f"{key}: WARNING threshold ({warn}) must be lower than CRITICAL ({crit})")
+        return self
 
     def thresholds(self) -> dict[str, tuple[float, float]]:
         """metrics 키 → (WARNING, CRITICAL)"""

@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -118,13 +119,25 @@ class Database:
             )
             await self.conn.commit()
 
-    async def set_job_status(self, job_id: str, status: str, finished_at: str | None) -> None:
+    async def refresh_job_status(self, job_id: str, compute: Callable[[dict[str, int]], str],
+                                 now: str) -> str | None:
+        """집계 읽기와 상태 쓰기를 결과 갱신과 같은 락 안에서 한다 (SPEC §8).
+
+        락 밖에서 읽으면 겹친 재계산 중 먼저 시작한 쪽의 오래된 집계(RUNNING)가 나중에 쓰여
+        COMPLETED를 되돌린다. INTERRUPTED는 유지하고 None을 돌려준다.
+        """
         async with self._write_lock:
+            job = await self.get_job_row(job_id)
+            if job is None or job["status"] == "INTERRUPTED":
+                return None
+            status = compute(await self.counts(job_id))
+            finished_at = None if status == "RUNNING" else now
             await self.conn.execute(
                 "UPDATE jobs SET status = ?, finished_at = COALESCE(finished_at, ?) WHERE id = ?",
                 (status, finished_at, job_id),
             )
             await self.conn.commit()
+            return status
 
     async def recover_interrupted(self, now: str) -> list[str]:
         """기동 시 복구 (SPEC §9). RUNNING job → INTERRUPTED,
@@ -215,9 +228,12 @@ class Database:
 
     async def list_jobs(self, limit: int) -> list[dict]:
         sums = ", ".join(f"SUM(r.status = '{s}') AS n_{s}" for s in RESULT_STATUSES)
+        # 최신 limit개 job을 인덱스로 먼저 고른 뒤 그 결과만 집계한다 (전체 이력을 집계하지 않게).
         cur = await self.conn.execute(
-            f"SELECT j.*, {sums} FROM jobs j LEFT JOIN job_results r ON r.job_id = j.id"
-            " GROUP BY j.id ORDER BY j.created_at DESC, j.rowid DESC LIMIT ?",
+            f"SELECT j.*, {sums} FROM"
+            " (SELECT rowid AS rid, * FROM jobs ORDER BY created_at DESC, rowid DESC LIMIT ?) j"
+            " LEFT JOIN job_results r ON r.job_id = j.id"
+            " GROUP BY j.id ORDER BY j.created_at DESC, j.rid DESC",
             (limit,),
         )
         rows = []

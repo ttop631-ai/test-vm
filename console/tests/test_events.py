@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta, timezone
 
+from app.agent_client import HealthResult
 from app.config import Settings
 from app.models import HealthPayload, LastError
 from app.poller import NodeState, Poller
@@ -146,3 +147,34 @@ def test_view_guard_when_poller_stopped():
     assert v.status == "UNREACHABLE"
     assert v.reasons == ["판정 갱신 중단 16초 (poller 정지 의심)"]
     assert s.status == "HEALTHY"  # 저장된 판정·이벤트는 건드리지 않는다
+
+
+# ---------------------------------------------------------------- 수집 시도 시각
+
+def test_last_attempt_recorded_when_request_starts():
+    """응답을 기다리는 동안에도 last_attempt_at은 이번 요청의 시작 시각이어야 한다.
+
+    응답 후에야 갱신하면 read timeout이 긴 설정이나 동시성 대기 중에 진행 중인 수집을
+    '오래된 시도(stale)'로 판정해 poller가 멈춘 것처럼 통신두절로 오판한다.
+    """
+    async def scenario():
+        gate = asyncio.Event()
+
+        class SlowClient:
+            async def get_health(self, node):
+                await gate.wait()
+                return HealthResult(node.id, 5, health=health())
+
+        p, s = make_poller()
+        p.client = SlowClient()
+        s.in_flight = True
+        task = asyncio.create_task(p._poll_node(p.nodes["node-c"], s))
+        await asyncio.sleep(0.05)
+        during = s.last_attempt_at
+        gate.set()
+        await task
+        return during, s.last_attempt_at, s.last_success_at
+
+    during, after, success = asyncio.run(scenario())
+    assert during is not None, "in-flight attempt is not recorded"
+    assert after == during == success  # 성공 시각·샘플 시각은 그 요청의 시작 시각 기준 (기존 규칙 유지)

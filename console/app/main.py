@@ -118,6 +118,7 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         task.cancel()
+        await asyncio.gather(task, return_exceptions=True)  # 루프가 멈춘 뒤 자원을 닫는다
         await poller.stop()
         await jobs.stop()
         await db.close()
