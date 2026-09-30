@@ -41,7 +41,9 @@
 │   │   ├── test_status.py
 │   │   ├── test_events.py
 │   │   ├── test_auth.py
-│   │   └── test_relay.py
+│   │   ├── test_relay.py
+│   │   ├── test_jobs.py
+│   │   └── test_config.py
 │   └── app/
 │       ├── main.py          # FastAPI 앱, lifespan에서 poller 시작/정지, 기동 시 job 복구
 │       ├── config.py        # 환경변수 → Settings
@@ -58,6 +60,8 @@
 └── agent/
     ├── Dockerfile
     ├── requirements.txt
+    ├── requirements-dev.txt
+    ├── tests/               # test_actions.py (멱등성·취소·파라미터·설정 검증)
     └── app/
         ├── main.py          # 라우트, 토큰 검사
         ├── simulator.py     # 메트릭 random walk, 데몬 상태

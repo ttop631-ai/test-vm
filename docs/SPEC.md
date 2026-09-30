@@ -77,7 +77,8 @@ compose 파일에 `${VAR:-default}`로 기본값을 두어 `.env` 없이도 `doc
 | `NODE_NAME` | `병원 A` | |
 | `AGENT_TOKEN` | (비밀) | 요청 헤더 `X-Agent-Token`과 비교 |
 | `PROFILE` | `normal` / `disk_pressure` / `daemon_down` | 초기 상태 프로필 |
-| `TICK_SEC` | `2` | 메트릭 갱신 주기 |
+| `TICK_SEC` | `2` | 메트릭 갱신 주기. 0보다 큰 유한값 (0이면 busy loop) |
+| `BLACKHOLE_MAX_HOLD_SEC` | `60` | blackhole 응답 보류 상한. 0보다 큰 유한값 |
 | `AGENT_KEEPALIVE_SEC` | `30` | HTTP keep-alive 유지 시간 (uvicorn `--timeout-keep-alive`). console의 `HTTP_KEEPALIVE_EXPIRY`보다 길어야 한다 (§5) |
 
 ### 3.2 시뮬레이션
@@ -144,6 +145,7 @@ compose 파일에 `${VAR:-default}`로 기본값을 두어 `.env` 없이도 `doc
 - 알 수 없는 `action` 또는 허용되지 않은 `params` → 400, **실행하지 않는다**.
 - 같은 `command_id` 재수신 시 재실행 금지. 완료 건은 저장된 결과를 그대로 반환, 실행 중이면 `{"command_id": "…", "state": "RUNNING"}` 200 반환.
 - 결과 캐시는 최근 500건 (메모리). agent 재기동 시 유실된다.
+- 실행이 취소되면 `DONE`·`exit_code ≠ 0`(`cancelled`)으로 저장해 같은 `command_id`를 다시 실행하지 않는다. 재시작 도중 취소된 데몬은 `STOPPED`로 둔다 (`RESTARTING`에 고정되면 이후 재시작이 모두 거부되므로).
 
 **GET /commands/{command_id}** → 저장 결과 200, 기록 없으면 404.
 
@@ -170,7 +172,7 @@ compose 파일에 `${VAR:-default}`로 기본값을 두어 `.env` 없이도 `doc
 
 ### 4.1 노드별 수집 상태 (메모리)
 
-`last_attempt_at`, `last_success_at`, `consecutive_failures`, `last_error {type, message}`, `latency_ms`, `last_health`(마지막 성공 payload), `skipped_cycles`, `samples`(최근 `SAMPLES_MAX`건 ring buffer: ts, cpu, mem, disk, latency. 성공한 수집만 기록하므로 실패 구간은 비어 있다).
+`last_attempt_at`(요청 시작 시각. 응답을 기다리기 전에 기록), `last_success_at`(성공한 요청의 시작 시각, 샘플 `ts`와 같음), `consecutive_failures`, `last_error {type, message}`, `latency_ms`, `last_health`(마지막 성공 payload), `skipped_cycles`, `samples`(최근 `SAMPLES_MAX`건 ring buffer: ts, cpu, mem, disk, latency. 성공한 수집만 기록하므로 실패 구간은 비어 있다).
 
 ### 4.2 판정 규칙 — 위에서부터 첫 번째로 맞는 규칙 적용
 
@@ -233,6 +235,7 @@ compose 파일에 `${VAR:-default}`로 기본값을 두어 `.env` 없이도 `doc
 4. 헬스체크는 재시도하지 않는다. 다음 주기가 곧 재시도다.
 5. 같은 노드에 대한 명령은 노드별 `asyncio.Lock`으로 직렬화한다 (재시작 두 건 동시 실행 방지). 대기 중인 대상은 PENDING. 획득 순서는 **노드 락 → 전역 세마포어** (락을 기다리며 세마포어 슬롯을 점유하지 않도록).
 6. Job 최악 소요 ≈ ⌈대상 수 / JOB_CONCURRENCY⌉ × (CMD_CONNECT + CMD_READ).
+7. 설정 검증 (기동 시, 위반하면 기동 거부): 주기·타임아웃·`STALE_FACTOR`·`HTTP_KEEPALIVE_EXPIRY`는 0보다 큰 유한값, 동시성·`FAIL_THRESHOLD`·`SLOW_MS`·`OUTPUT_MAX_BYTES`는 1 이상, 메트릭 임계치는 0~100이고 WARNING < CRITICAL. (동시성 0은 수집·job을 영구 대기시키고, 주기 0은 busy loop를 만든다.)
 
 ---
 
@@ -246,7 +249,7 @@ compose 파일에 `${VAR:-default}`로 기본값을 두어 `.env` 없이도 `doc
 | `httpx.ReadTimeout`, `WriteTimeout`, `ReadError`, `RemoteProtocolError` | `TIMEOUT` | UNKNOWN | 전달됐을 수 있음, 실행 여부 불명 | **자동 재시도 금지** → reconcile |
 | HTTP 400 / 401 | `AGENT_ERROR` | FAILED | agent가 거부 (실행 안 함) | 요청·설정 수정 후 |
 | HTTP 5xx | `AGENT_ERROR` | FAILED | agent 내부 오류 | 수동 확인 후 |
-| 200인데 응답 스키마 불일치 | `AGENT_ERROR` | 헬스: 실패 / 명령: UNKNOWN | 명령은 실행됐을 수 있음 | reconcile |
+| 200인데 응답 스키마 불일치 (메트릭이 NaN·Infinity이거나 0~100 밖인 경우 포함) | `AGENT_ERROR` | 헬스: 실패 / 명령: UNKNOWN | 명령은 실행됐을 수 있음 | reconcile |
 | `exit_code ≠ 0` | `EXEC_ERROR` | FAILED | 실행했으나 실패 | 수동 |
 
 > **주의**: httpx에서 `ConnectTimeout`은 `TimeoutException`의 하위 클래스다. `except httpx.TimeoutException`을 먼저 두면 "미전달"이 "결과 미확인"으로 잘못 분류된다. Connect 계열을 먼저 잡는다.
@@ -278,7 +281,7 @@ compose 파일에 `${VAR:-default}`로 기본값을 두어 `.env` 없이도 `doc
   - 무인증 공개 경로: `/healthz`, `/login`, `/api/login`, `/style.css`, `/img.png`.
   - 무인증 요청: `/api/*` → 401 JSON, 그 외 GET/HEAD → 302 `/login`, 그 외 메서드 → 401.
   - 비밀번호는 scrypt(N=2^14, r=8, p=1, salt 16B) 해시로만 보관하고 `hmac.compare_digest`로 비교한다. 해시 계산(약 50ms)은 이벤트 루프를 막지 않도록 스레드에서 실행한다. 없는 사용자명도 더미 해시를 계산해 응답 시간으로 계정 존재 여부가 드러나지 않게 한다.
-  - 로그인·Basic 실패는 클라이언트 IP별로 세어 `LOGIN_MAX_FAILURES`회 연속이면 `LOGIN_LOCKOUT_SEC`초 동안 429.
+  - 로그인·Basic 실패는 클라이언트 IP별로 세어 `LOGIN_MAX_FAILURES`회 연속이면 `LOGIN_LOCKOUT_SEC`초 동안 429. 차단 중에 도착한 실패(차단 전에 시작된 병렬 요청의 늦은 실패 포함)는 차단 시각을 바꾸지 않는다 — 차단이 풀리면 병렬 요청으로 차단을 우회할 수 있다.
   - 기동 시 비밀번호가 기본값(`nodewatch`, `monwatch`)이면 경고 로그를 남긴다.
 
 **역할 (기본 차단)**
@@ -327,6 +330,8 @@ compose 파일에 `${VAR:-default}`로 기본값을 두어 `.env` 없이도 `doc
 - 200 `RUNNING` → UNKNOWN 유지, 메시지 "agent에서 실행 중".
 - 404 → UNKNOWN 유지, 메시지 "agent에 기록 없음 (미수신 또는 agent 재기동)". 자동으로 FAILED 처리하지 않는다.
 - 반영 후 job 상태 재계산.
+- job 상태 재계산(집계 읽기 + 상태 쓰기)은 결과 갱신과 직렬화한다. 겹친 재계산 중 먼저 시작한 쪽의 오래된 집계가 나중에 쓰여 `COMPLETED`가 `RUNNING`으로 되돌아가지 않게 한다.
+- `JobDetail.counts`는 함께 반환하는 `results`에서 계산한다 (같은 시점). `GET /api/jobs`는 최신 `limit`개 job을 먼저 고른 뒤 그 job들의 결과만 집계한다.
 
 **NodeView**
 
@@ -460,6 +465,8 @@ CREATE INDEX IF NOT EXISTS idx_node_events_node ON node_events(node_id, id DESC)
 - 정적 파일: `index.html`, `app.js`, `style.css`, `login.html`, `img.png`(로그인 화면 로고). 외부 CDN, 웹폰트, 빌드 단계 없음 (폐쇄망에서도 그대로 동작).
 - 로그인 페이지: 로고를 화면 중앙에 두고 그 아래 ID/PW 입력. 성공 시 `/`로 이동. 대시보드 상단에 사용자명·역할과 [로그아웃]. API가 401을 돌려주면(세션 만료, console 재기동) 로그인 페이지로 이동한다.
 - 브라우저 탭이 백그라운드(`document.hidden`)이면 폴링을 멈추고, 다시 보이면 즉시 갱신한다 (보이지 않는 화면이 샘플 전체를 반복 조회하지 않게).
+- 같은 자원에 대한 조회는 동시에 하나만 진행한다. 늦게 도착한 이전 요청의 응답(필터·job을 바꾸기 전 요청)은 화면에 반영하지 않는다. 샘플 응답은 요청한 시점의 node_id에 연결한다.
+- 차트 최댓값 계산 등은 배열 크기와 무관하게 동작해야 한다 (노드 수 × `SAMPLES_MAX`가 수십만 개여도). 화면 렌더 오류는 브라우저 콘솔에 남긴다.
 - `monitor` 역할: 일괄 제어·데모 제어 탭을 표시하지 않고, 해당 탭으로 직접 들어오면 상태 현황으로 보낸다. 실행 이력은 조회만 가능하며 [결과 재확인]·[실패 대상 재실행] 버튼을 표시하지 않는다. 역할을 확인하기 전에는 제어 탭을 숨긴 상태로 시작한다.
 - 모든 API 호출은 상대경로 (`/api/...`).
 - 시각은 API의 UTC 값을 브라우저 로컬 시간으로 변환해 표시.
