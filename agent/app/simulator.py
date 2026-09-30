@@ -21,6 +21,7 @@ RESTARTING = "RESTARTING"
 
 WALK_STEP = 3.0  # tick당 ±3%p
 DISK_PRESSURE_DRIFT = 0.05  # disk_pressure 프로필: tick당 누적 증가량
+DISK_PRESSURE_CAP = 89.0  # 기준 범위 상단과 값의 상한 (CRITICAL 90 미만 유지, SPEC §3.2)
 
 # PROFILE → 메트릭별 기준 범위 (lo, hi)
 PROFILES: dict[str, dict[str, tuple[float, float]]] = {
@@ -48,6 +49,7 @@ class Metric:
     value: float
     lo: float
     hi: float
+    cap: float = 100.0  # 값과 기준 범위 상단의 상한
 
     def step(self) -> None:
         # 기준 범위 안에서는 ±3%p random walk.
@@ -60,9 +62,11 @@ class Metric:
             delta = -random.uniform(0, WALK_STEP)
         else:
             delta = random.uniform(-WALK_STEP, WALK_STEP)
-        self.value = _clamp(self.value + delta)
+        self.value = _clamp(self.value + delta, hi=self.cap)
 
     def shift_band(self, delta: float) -> None:
+        # 상단이 cap에 닿으면 더 올리지 않는다 (범위 폭은 유지).
+        delta = min(delta, self.cap - self.hi)
         self.lo = _clamp(self.lo + delta)
         self.hi = _clamp(self.hi + delta)
 
@@ -105,6 +109,8 @@ class Simulator:
             raise ValueError(f"unknown PROFILE: {self.profile!r} (allowed: {', '.join(PROFILES)})")
         for name, (lo, hi) in PROFILES[self.profile].items():
             self.metrics[name] = Metric(value=random.uniform(lo, hi), lo=lo, hi=hi)
+        if self.profile == "disk_pressure":
+            self.metrics["disk_pct"].cap = DISK_PRESSURE_CAP
         now = time.monotonic()
         for name in DAEMON_NAMES:
             if name in INITIAL_STOPPED[self.profile]:
@@ -116,8 +122,6 @@ class Simulator:
 
     def tick(self) -> None:
         if self.profile == "disk_pressure":
-            # TODO(question): TICK_SEC=2 기준 약 80초 뒤 기준 범위 상단이 90(CRITICAL)에 도달한다.
-            #   시연 시나리오(병원 B = 경고)와 충돌할 수 있어 상한 여부 확인 필요.
             self.metrics["disk_pct"].shift_band(DISK_PRESSURE_DRIFT)
         for m in self.metrics.values():
             m.step()
