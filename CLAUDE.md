@@ -37,7 +37,8 @@
 │   ├── requirements-dev.txt
 │   ├── nodes.json
 │   ├── tests/
-│   │   └── test_status.py
+│   │   ├── test_status.py
+│   │   └── test_events.py
 │   └── app/
 │       ├── main.py          # FastAPI 앱, lifespan에서 poller 시작/정지, 기동 시 job 복구
 │       ├── config.py        # 환경변수 → Settings
@@ -105,6 +106,7 @@
 | S3 | console: actions, jobs, db, reconcile, retry, 기동 시 복구 | `POST /api/jobs` 즉시 202. blackhole 노드는 UNKNOWN, 나머지 SUCCESS. chaos 해제 후 reconcile로 SUCCESS 확인 |
 | S4 | 대시보드 4개 탭 | 새로고침 없이 상태 갱신. HIGH 액션 확인 모달. console 중지 시 연결 끊김 배너 |
 | S5 | compose, auth, `.env.example`, AWS 배포 | `docker compose up -d --build` 한 번으로 기동. 외부에서는 console 포트만 열림. 인증 없이 `/`와 `/api/*` 401 |
+| S6a | 판정을 poller로 이동, 상태 전이 이벤트 저장(`node_events`), `GET /api/events`, 이벤트 타임라인 탭 (+ 단위 테스트) | node-c blackhole → `CRITICAL → UNREACHABLE` 1건, 해제 → `UNREACHABLE → CRITICAL` 1건. 상태 불변 주기에는 기록 없음. console 재기동 후에도 이력 유지, 첫 판정은 `from_status = null`. poller 정지 시 API는 UNREACHABLE(판정 갱신 중단) |
 
 ## 8. 커밋 규칙
 

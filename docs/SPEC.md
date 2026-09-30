@@ -179,6 +179,16 @@ compose 파일에 `${VAR:-default}`로 기본값을 두어 `.env` 없이도 `doc
 - 연속 실패 1~2회 동안은 마지막 성공 메트릭을 계속 표시하되 "수집 실패 n회" 배지를 붙인다. 값이 오래된 것임을 숨기지 않는다.
 - 판정은 항상 `reasons: list[str]`를 함께 돌려준다. 예: `disk 91.2% ≥ 90`, `daemon emr-sync STOPPED`, `3회 연속 TIMEOUT`, `응답 1820ms ≥ 1500`.
 - 판정 로직은 `console/app/status.py`의 순수 함수 `evaluate(state, now, settings) -> (status, reasons)`. I/O 금지, 단위 테스트 대상.
+- **판정 시점은 poller**다. 노드별 수집 결과를 반영한 직후, 그리고 매 주기 시작 시 전 노드를 평가해 `status`, `reasons`, `evaluated_at`을 수집 상태에 저장한다. API는 저장된 판정을 그대로 반환한다.
+- 안전장치: poller의 마지막 평가 시각이 `STALE_FACTOR × POLL_INTERVAL_SEC`보다 오래되면(poller 정지) API는 저장값 대신 `UNREACHABLE`, 사유 `판정 갱신 중단 n초 (poller 정지 의심)`을 반환한다. poller가 멈춘 상태이므로 이벤트는 기록되지 않는다.
+
+### 4.4 상태 전이 이벤트
+
+- poller가 판정할 때 노드의 `status`가 직전 판정과 다르면 `node_events`(§9)에 한 행을 기록한다. `reasons`만 바뀌고 상태가 같으면 기록하지 않는다 (사유에 측정값이 들어 있어 매 주기 바뀌기 때문).
+- console 기동 후 노드별 첫 확정 판정(UNKNOWN이 아닌 첫 상태)은 `from_status = null`로 기록한다 ("기동 후 첫 판정"). 이전 프로세스의 마지막 상태와 잇지 않는다.
+- 이벤트 기록 실패는 로그만 남기고 수집·판정을 멈추지 않는다.
+- 임계치 근처에서 값이 오르내리면 이벤트가 반복될 수 있다 (히스테리시스 없음, 알려진 한계).
+- 보관 기간 `EVENTS_RETENTION_DAYS`(기본 30일). 기동 시와 1시간마다 오래된 행을 삭제한다.
 
 ### 4.3 임계치
 
@@ -205,6 +215,7 @@ compose 파일에 `${VAR:-default}`로 기본값을 두어 `.env` 없이도 `doc
 | `CMD_READ_TIMEOUT` | 15s | 최장 액션(재시작 ~5s)의 3배 여유 |
 | `JOB_CONCURRENCY` | 10 | 동시에 명령을 받는 노드 수 상한 |
 | `OUTPUT_MAX_BYTES` | 65536 | 노드 반환 로그 저장 상한 |
+| `EVENTS_RETENTION_DAYS` | 30 | 상태 전이 이벤트 보관 기간 (§4.4) |
 | `SAMPLES_MAX` | 60 | 노드별 메모리 샘플 수 (1~17280). 60 × 5s = 5분, 720 = 1시간. 대시보드 시계열 창은 보유 샘플 범위에 맞춰 늘어난다. 재기동 시 초기화 |
 
 규칙:
@@ -270,6 +281,7 @@ compose 파일에 `${VAR:-default}`로 기본값을 두어 `.env` 없이도 `doc
 | POST | `/api/jobs/{job_id}/reconcile` | UNKNOWN 대상 결과 재조회 | 202 |
 | POST | `/api/jobs/{job_id}/retry` | 실패 대상 재실행 (새 job) | 202 `{job_id}` |
 | GET/POST | `/api/nodes/{node_id}/chaos` | 데모용 장애 주입 중계 | 200 |
+| GET | `/api/events?limit=100&node_id=&before_id=` | 상태 전이 이벤트 (최신순). `node_id`로 필터, `before_id`로 이전 페이지 | 200 `NodeEvent[]` / 400 |
 
 **POST /api/jobs**
 
@@ -306,6 +318,13 @@ compose 파일에 `${VAR:-default}`로 기본값을 두어 `.env` 없이도 `doc
   "last_success_at": "2026-10-01T03:00:05Z",
   "last_error": null
 }
+```
+
+**NodeEvent**
+
+```json
+{"id": 42, "node_id": "node-c", "node_name": "병원 C", "ts": "2026-10-01T03:00:20Z",
+ "from_status": "CRITICAL", "to_status": "UNREACHABLE", "reasons": ["3회 연속 TIMEOUT"]}
 ```
 
 **JobDetail**
@@ -386,6 +405,17 @@ CREATE TABLE IF NOT EXISTS job_results (
 );
 
 CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS node_events (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  node_id       TEXT NOT NULL,
+  ts            TEXT NOT NULL,   -- UTC ISO8601, 판정 시각
+  from_status   TEXT,            -- NULL = console 기동 후 첫 판정
+  to_status     TEXT NOT NULL,   -- UNKNOWN | UNREACHABLE | CRITICAL | WARNING | HEALTHY
+  reasons_json  TEXT NOT NULL    -- to_status 판정 사유 (list[str])
+);
+
+CREATE INDEX IF NOT EXISTS idx_node_events_node ON node_events(node_id, id DESC);
 ```
 
 **기동 시 복구** (console 재시작으로 끊긴 job 처리):
@@ -394,7 +424,7 @@ CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at DESC);
 - 그 job의 PENDING 대상 → FAILED / `INTERRUPTED` (전송 전이므로 재시도 안전).
 - 그 job의 RUNNING 대상 → UNKNOWN / `INTERRUPTED` (전송 후일 수 있으므로 reconcile 대상).
 
-헬스 샘플은 메모리 ring buffer에만 두고 영속화하지 않는다. 시계열 보관은 모니터링 시스템의 책임이며 이 프로토타입은 현재 상태 중심이다.
+헬스 샘플은 메모리 ring buffer에만 두고 영속화하지 않는다 (상태 전이 이벤트만 `node_events`에 영속화). 시계열 보관은 모니터링 시스템의 책임이며 이 프로토타입은 현재 상태 중심이다.
 
 ---
 
@@ -409,7 +439,8 @@ CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at DESC);
 | 1. 상태 현황 | 노드 카드: 상태 색·라벨, reasons, CPU/MEM/DISK 바, 데몬 목록, 응답시간, "마지막 수집 n초 전", 수집 실패 배지. 상단 요약(정상/경고/장애 개수). 시계열 패널 4개(CPU/MEM/DISK/응답시간): 노드별 선, 임계선, 최근 샘플(`GET /api/nodes/{id}`의 `samples`), 수집 실패 구간은 끊어서 표시, hover 시 시각별 값 | 3초 폴링 |
 | 2. 일괄 제어 | 노드 체크박스(상태 배지 포함, 전체 선택), 액션 선택 → 카탈로그 기반 params 폼, 실행. HIGH 위험도 → 대상 확인 모달. UNREACHABLE 노드 선택 시 경고 문구 (실행은 허용). 실행 후 해당 job 상세로 이동 | — |
 | 3. 실행 이력 | job 목록(시각, 액션, 대상 수, 결과 카운트, 요청자, 상태). 상세: 노드별 상태, error_type, 소요시간, 출력(`<pre>`, 접기). [결과 재확인] [실패 대상 재실행] 버튼 | RUNNING job은 2초 폴링 |
-| 4. 데모 제어 | 노드별 chaos 설정 (지연, 오류율, blackhole, 데몬 중지, 초기화). "데모 전용" 표기 | — |
+| 4. 이벤트 | 상태 전이 타임라인 (최신순, 날짜별 묶음): 시각, 노드, 이전 → 새 상태 배지, 사유, 이전 상태 지속 시간. 노드 필터, 더 보기(`before_id`) | 5초 폴링 |
+| 5. 데모 제어 | 노드별 chaos 설정 (지연, 오류율, blackhole, 데몬 중지, 초기화). "데모 전용" 표기 | — |
 
 - console API 호출 자체가 실패하면 상단에 "콘솔 연결 끊김 — 마지막 갱신 hh:mm:ss" 배너를 띄우고 기존 화면 값을 흐리게 표시한다.
 
