@@ -146,10 +146,14 @@ docker compose ps          # 4개 컨테이너 healthy 확인
 docker compose -f docker-compose.yml -f compose.dev.yml up -d --build
 curl -H 'X-Agent-Token: dev-token-a' localhost:9001/health
 
-# 단위 테스트 (pytest는 이미지에 넣지 않으므로 임시 컨테이너에서 실행)
-docker run --rm -v "$PWD/console:/src:ro" -w /src python:3.12-slim \
-  sh -c "pip install -q -r requirements-dev.txt && python -m pytest -q -p no:cacheprovider"
+# 단위 테스트 (pytest는 이미지에 넣지 않으므로 임시 컨테이너에서 실행. console·agent 각각)
+for d in console agent; do
+  docker run --rm -v "$PWD/$d:/src:ro" -w /src python:3.12-slim \
+    sh -c "pip install -q -r requirements-dev.txt && python -m pytest -q -p no:cacheprovider"
+done
 ```
+
+교차 검증(다른 도구의 검증 보고를 이 저장소에서 재현·수정한 기록)은 [`docs/VALIDATION.md`](docs/VALIDATION.md)에 있다.
 
 
 주요 설정 (전체 목록은 `docs/SPEC.md §2.2, §5`):
