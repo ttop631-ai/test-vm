@@ -29,9 +29,14 @@ def health(cpu=30.0, mem=50.0, disk=60.0, daemons=None) -> HealthPayload:
     })
 
 
-def state(*, success_age: float | None = 1.0, failures: int = 0, error: str = "TIMEOUT",
-          latency: int | None = 10, h: HealthPayload | None = None) -> NodeState:
+def state(*, success_age: float | None = 1.0, attempt_age: float | None = None, failures: int = 0,
+          error: str = "TIMEOUT", latency: int | None = 10, h: HealthPayload | None = None) -> NodeState:
+    """attempt_age 기본값: 성공 이력이 있으면 success_age, 없고 실패만 있으면 1초 전."""
     s = NodeState(node_id="node-x", node_name="X")
+    if attempt_age is None:
+        attempt_age = success_age if success_age is not None else (1.0 if failures else None)
+    if attempt_age is not None:
+        s.last_attempt_at = NOW - timedelta(seconds=attempt_age)
     if success_age is not None:
         s.last_success_at = NOW - timedelta(seconds=success_age)
         s.last_health = h or health()
@@ -66,20 +71,28 @@ def test_unreachable_no_success_at_threshold():
 def test_unreachable_failures_override_last_metrics():
     # 마지막 성공 값이 CRITICAL이어도 통신두절이 우선
     h = health(daemons={"pacs-gateway": "RUNNING", "hl7-interface": "RUNNING", "emr-sync": "STOPPED"})
-    status, reasons = evaluate(state(success_age=12, failures=3, h=h), NOW, S)
+    status, reasons = evaluate(state(success_age=18, attempt_age=3, failures=3, h=h), NOW, S)
     assert status == "UNREACHABLE"
     assert reasons == ["3회 연속 TIMEOUT"]
 
 
 def test_unreachable_stale_without_failures():
-    # poller 정지 등으로 실패 카운트 없이 오래된 경우 (> 3 × 5s)
+    # poller 정지 등으로 실패 카운트 없이 수집 시도가 멈춘 경우 (> 3 × 5s)
     status, reasons = evaluate(state(success_age=16), NOW, S)
     assert status == "UNREACHABLE"
-    assert reasons == ["마지막 성공 16s 전 > 15s"]
+    assert reasons == ["마지막 수집 시도 16s 전 > 15s"]
 
 
 def test_not_stale_at_boundary():
     assert evaluate(state(success_age=15), NOW, S)[0] == "HEALTHY"
+
+
+def test_node_failure_below_threshold_is_not_stale():
+    # S2 검증 회귀: blackhole 노드는 마지막 성공 15s+ 경과·2회 실패 시점에 UNREACHABLE이면 안 된다.
+    # 마지막 시도는 5s 주기로 계속 갱신되므로 stale이 아니다.
+    h = health(daemons={"pacs-gateway": "RUNNING", "hl7-interface": "RUNNING", "emr-sync": "STOPPED"})
+    status, _ = evaluate(state(success_age=17, attempt_age=2, failures=2, h=h), NOW, S)
+    assert status == "CRITICAL"
 
 
 # ---------------------------------------------------------------- 3. CRITICAL
@@ -118,7 +131,7 @@ def test_warning_metric(kw, reason):
 
 @pytest.mark.parametrize("failures", [1, 2])
 def test_warning_recent_failures_with_success_history(failures):
-    status, reasons = evaluate(state(success_age=5 * failures, failures=failures), NOW, S)
+    status, reasons = evaluate(state(success_age=5 * failures, attempt_age=1, failures=failures), NOW, S)
     assert status == "WARNING"
     assert reasons == [f"수집 실패 {failures}회 (TIMEOUT)"]
 

@@ -12,6 +12,7 @@ from .models import HealthPayload, LastError
 
 
 class StateLike(Protocol):
+    last_attempt_at: datetime | None
     last_success_at: datetime | None
     consecutive_failures: int
     last_error: LastError | None
@@ -41,15 +42,16 @@ def evaluate(state: StateLike, now: datetime, settings: Settings) -> tuple[str, 
             return "UNKNOWN", ["첫 수집 대기 중"]
         return "UNKNOWN", [_failure_reason(state)]
 
-    # 2. UNREACHABLE: 연속 실패 ≥ 임계 OR 마지막 성공이 너무 오래됨
+    # 2. UNREACHABLE: 연속 실패 ≥ 임계 OR 마지막 수집 시도가 너무 오래됨 (poller 정지 감지)
+    #    last_success_at이 아니라 last_attempt_at 기준이다. 노드 장애는 실패 카운트로만 판정한다.
     reasons: list[str] = []
     if failures >= threshold:
         reasons.append(_failure_reason(state))
     stale_limit = settings.stale_factor * settings.poll_interval_sec
-    if state.last_success_at is not None:
-        age = (now - state.last_success_at).total_seconds()
+    if state.last_attempt_at is not None:
+        age = (now - state.last_attempt_at).total_seconds()
         if age > stale_limit:
-            reasons.append(f"마지막 성공 {int(age)}s 전 > {_fmt(stale_limit)}s")
+            reasons.append(f"마지막 수집 시도 {int(age)}s 전 > {_fmt(stale_limit)}s")
     if reasons:
         return "UNREACHABLE", reasons
 
