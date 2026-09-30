@@ -40,10 +40,11 @@
 |---|---|---|---|
 | 1 | 대시보드 접속 → **상태 현황** | 병원 A 정상, 병원 B 경고(디스크), 병원 C 장애(`emr-sync` 중지) | 상태별 색·사유(reasons) 표기 |
 | 2 | **일괄 제어** → 병원 C 선택 → 데몬 재시작(`emr-sync`) | 확인 모달 → job 생성 → 수 초 후 SUCCESS, 상태 현황에서 C가 정상 복귀 | 비동기 실행, 결과 기록 |
-| 3 | **데모 제어** → 병원 C `blackhole` ON | 약 15초(3주기) 후 C만 "장애·통신두절". A/B의 "마지막 수집" 시각은 계속 5초 간격 갱신 | **비블로킹** |
+| 3 | **데모 제어** → 병원 C `blackhole` ON | 약 18초(3주기 + 응답 대기 3초) 후 C만 "장애·통신두절". A/B의 "마지막 수집" 시각은 계속 5초 간격 갱신, 시계열에서 C의 선만 끊김 | **비블로킹** |
 | 4 | **일괄 제어** → 전체 선택 → 로그 정리 | 즉시 job 생성. A/B SUCCESS, C는 15초 후 UNKNOWN(결과 미확인) | 타임아웃 ≠ 실패 |
 | 5 | **데모 제어** → C 초기화 → **실행 이력**에서 해당 job [결과 재확인] | C가 SUCCESS로 갱신 (blackhole 중에도 명령은 실제로 실행됐음) | reconcile, 멱등 설계 이유 |
-| 6 | (선택) 서버에서 `docker compose stop node-c` 후 명령 실행 | C는 즉시 FAILED(CONNECT_ERROR, 미전달) | 미전달과 미확인의 구분 |
+| 6 | **이벤트** 탭 | C의 `장애 → 장애·통신두절 → 장애` 전이가 시각·사유·이전 상태 지속 시간과 함께 기록됨. 상태가 바뀔 때만 기록 | 상태 이력 |
+| 7 | (선택) 서버에서 `docker compose stop node-c` 후 명령 실행 | C는 약 2초 후 FAILED(CONNECT_ERROR, 미전달) | 미전달과 미확인의 구분 |
 
 ---
 
@@ -58,7 +59,7 @@ flowchart LR
     subgraph ec2["AWS EC2 · docker compose"]
         subgraph pub["public 네트워크 (호스트 포트 1개만 노출)"]
             console["console<br/>FastAPI · 정적 대시보드<br/>poller · job worker"]
-            db[("SQLite WAL<br/>/data/nodewatch.db")]
+            db[("SQLite WAL<br/>/data/nodewatch.db<br/>job 이력 · 상태 전이 이벤트")]
         end
         subgraph closed["nodenet (internal · 외부 통신 불가)"]
             na["node-a<br/>병원 A agent"]
@@ -79,11 +80,11 @@ flowchart LR
 
 | 구성 요소 | 책임 |
 |---|---|
-| console / poller | 5초 주기로 전 노드 병렬 수집, 노드별 연속 실패·지연 추적, 상태 판정 |
+| console / poller | 5초 주기로 전 노드 병렬 수집, 노드별 연속 실패·지연 추적, 상태 판정, 상태가 바뀌면 이벤트 기록 |
 | console / job worker | 일괄 명령을 백그라운드로 노드별 병렬 실행 (노드별 직렬화 + 전역 동시성 상한), 결과 기록 |
 | console / API + UI | REST API와 정적 대시보드를 같은 오리진에서 제공, HTTP Basic 인증 |
 | agent (node-a/b/c) | 더미 메트릭·데몬 상태 시뮬레이션, 화이트리스트 명령 실행, 장애 주입(chaos) |
-| SQLite | job 이력과 노드별 결과·반환 로그 영속화 (헬스 샘플은 메모리) |
+| SQLite | job 이력, 노드별 결과·반환 로그, 상태 전이 이벤트 영속화 (헬스 샘플은 메모리 ring buffer) |
 
 ### 3.2 일괄 명령 처리 흐름
 
@@ -123,10 +124,10 @@ sequenceDiagram
 
 ## 4. 로컬 빌드 및 실행
 
-요구 사항: Docker 24+ 와 Docker Compose v2.
+요구 사항: Docker 24+ 와 Docker Compose v2.24+ (`env_file`의 `required: false` 사용).
 
 ```bash
-git clone TBD_REPO_URL nodewatch
+git clone https://github.com/ttop631-ai/test-vm.git nodewatch
 cd nodewatch
 docker compose up -d --build
 docker compose ps          # 4개 컨테이너 healthy 확인
@@ -135,6 +136,20 @@ docker compose ps          # 4개 컨테이너 healthy 확인
 - 접속: http://localhost:8080 — `admin` / `nodewatch`
 - `.env` 없이 기본값으로 동작한다. 값을 바꾸려면 `cp .env.example .env` 후 수정.
 - 종료: `docker compose down` (이력까지 삭제: `docker compose down -v`)
+- 기본 비밀번호(`nodewatch`)로 기동하면 console 로그에 `event=default_admin_password` 경고가 남는다. 외부 노출 전 `.env`에서 변경.
+
+개발·검증용:
+
+```bash
+# agent 포트를 127.0.0.1:9001~9003에 바인딩 (agent API 직접 호출용, 운영 배포에는 사용하지 않음)
+docker compose -f docker-compose.yml -f compose.dev.yml up -d --build
+curl -H 'X-Agent-Token: dev-token-a' localhost:9001/health
+
+# 단위 테스트 (pytest는 이미지에 넣지 않으므로 임시 컨테이너에서 실행)
+docker run --rm -v "$PWD/console:/src:ro" -w /src python:3.12-slim \
+  sh -c "pip install -q -r requirements-dev.txt && python -m pytest -q -p no:cacheprovider"
+```
+
 
 주요 설정 (전체 목록은 `docs/SPEC.md §2.2, §5`):
 
@@ -147,6 +162,9 @@ docker compose ps          # 4개 컨테이너 healthy 확인
 | `HEALTH_CONNECT_TIMEOUT` / `HEALTH_READ_TIMEOUT` | 1.0 / 3.0 | 헬스체크 타임아웃(초) |
 | `CMD_CONNECT_TIMEOUT` / `CMD_READ_TIMEOUT` | 2.0 / 15 | 명령 타임아웃(초) |
 | `FAIL_THRESHOLD` | 3 | 연속 실패 n회부터 통신두절 판정 |
+| `SAMPLES_MAX` | 60 | 노드별 메모리 샘플 수 (60 = 5분, 720 = 1시간). 시계열 창이 이에 맞춰 늘어남 |
+| `EVENTS_RETENTION_DAYS` | 30 | 상태 전이 이벤트 보관 기간 |
+| `HTTP_KEEPALIVE_EXPIRY` | 15 | console → agent idle 연결 재사용 상한(초). 수집 주기보다 길고 agent keep-alive(30초)보다 짧아야 함 |
 
 ---
 
@@ -177,7 +195,7 @@ sudo dd if=/dev/zero of=/swapfile bs=1M count=1024
 sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
 
 # 기동
-git clone TBD_REPO_URL nodewatch && cd nodewatch
+git clone https://github.com/ttop631-ai/test-vm.git nodewatch && cd nodewatch
 cat > .env <<'EOF'
 CONSOLE_PORT=80
 ADMIN_PASSWORD=TBD_DEMO_PASSWORD
@@ -205,6 +223,8 @@ docker compose up -d --build
 ### 6.2 오탐 억제
 
 한 번의 타임아웃으로 "장애"를 띄우면 운영자는 곧 경보를 무시하게 된다. 1~2회 실패는 "경고 + 수집 실패 n회"로, 3회 연속 실패부터 "장애·통신두절"로 판정한다. 모든 판정에는 사유(reasons)를 붙여 화면만 보고 원인을 알 수 있게 했고, 수집 실패 중에는 마지막 성공 값이 오래된 값임을 표시한다.
+
+판정은 poller가 수집할 때마다 하고, **상태가 바뀔 때만** 이벤트로 남긴다(이벤트 탭). 매 주기 스냅샷을 쌓지 않으므로 이력이 짧고, 운영자는 "언제부터 얼마나 장애였는지"를 바로 읽을 수 있다. poller 자체가 멈추면 판정도 멈추므로, API는 마지막 판정이 오래됐을 때 저장값 대신 "판정 갱신 중단"을 통신두절로 보여 준다.
 
 ### 6.3 비동기 제어
 
@@ -250,6 +270,8 @@ docker compose up -d --build
 | console 재기동 | 기동 시 RUNNING job 조회 | INTERRUPTED 처리 | PENDING→FAILED, RUNNING→UNKNOWN | 결과 재확인 / 재실행 |
 | console 자체 접속 불가 | 대시보드 fetch 실패 | 기존 값 유지 + 흐림 처리 | "콘솔 연결 끊김 — 마지막 갱신 시각" 배너 | 자동 폴링 |
 | 과대 출력 | 크기 검사 | 64KB 절단 | "출력 일부 생략" 표시 | — |
+| 유휴 연결 재사용 경합 | `RemoteProtocolError` | keep-alive 순서 고정: 수집 주기(5s) < console 연결 만료(15s) < agent keep-alive(30s) | (발생하지 않도록 설정으로 예방) | — |
+| poller 정지 | 마지막 판정 시각 경과 | API가 저장 판정 대신 통신두절 반환 | "판정 갱신 중단 n초 (poller 정지 의심)" | 자동 (poller 재기동) |
 
 세부 기준은 `docs/SPEC.md §4~§6` 참고.
 
@@ -260,11 +282,13 @@ docker compose up -d --build
 ```
 .
 ├── docker-compose.yml
+├── compose.dev.yml   # 검증용 override (agent 포트 127.0.0.1 바인딩)
 ├── .env.example
 ├── console/          # 중앙 API · poller · job worker · 정적 대시보드
-│   ├── app/
+│   ├── app/          # static/: 대시보드 5개 탭 (상태 현황·일괄 제어·실행 이력·이벤트·데모 제어)
 │   ├── nodes.json    # 노드 레지스트리 (토큰은 env 참조)
-│   └── tests/
+│   ├── requirements-dev.txt  # 테스트 전용 (pytest)
+│   └── tests/        # test_status.py (판정 규칙), test_events.py (전이 이벤트)
 ├── agent/            # 병원 노드 mock agent (node-a/b/c 공용 이미지)
 │   └── app/
 └── docs/
@@ -284,3 +308,5 @@ docker compose up -d --build
 | 결과 재확인 | 수동 | 일정 시간 후 자동 reconcile |
 | 이력·지표 | SQLite, 메모리 샘플 | 시계열 DB, 알림 연계 |
 | 가용성 | console 단일 인스턴스 | 상태 외부화 후 다중화 |
+| 이벤트 판정 | 임계치 단일 경계 (히스테리시스 없음) | 경계 근처 값이 오르내리면 경고↔정상 이벤트가 반복될 수 있음 → 복귀 임계치 분리 |
+| 시계열 | 메모리 샘플 (`SAMPLES_MAX`, 재기동 시 초기화), 대시보드가 3초마다 전체 샘플 조회 | 샘플 영속화 또는 외부 시계열 DB, 다운샘플링 API |

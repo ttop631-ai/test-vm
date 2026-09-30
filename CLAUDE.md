@@ -28,6 +28,7 @@
 ├── history.md
 ├── CLAUDE.md
 ├── docker-compose.yml
+├── compose.dev.yml     # 검증용 override (agent 포트 127.0.0.1 바인딩)
 ├── .env.example
 ├── docs/
 │   └── SPEC.md
