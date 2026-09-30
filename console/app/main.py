@@ -16,8 +16,8 @@ from fastapi.staticfiles import StaticFiles
 
 from .actions import CATALOG
 from .agent_client import AgentClient
-from .auth import (ROLE_ADMIN, ROLE_MONITOR, SESSION_COOKIE, Account, AuthMiddleware, Authenticator, client_ip,
-                   verify_password)
+from .auth import (ROLE_ADMIN, ROLE_MONITOR, SESSION_COOKIE, Account, AuthMiddleware, Authenticator,
+                   SecurityHeadersMiddleware, client_ip, verify_password)
 from .config import DEFAULT_PASSWORDS, Settings
 from .db import Database
 from .jobs import JobError, JobService, utc_now_iso
@@ -128,6 +128,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="NodeWatch console", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 # StaticFiles mount까지 보호하려면 라우터 dependency가 아니라 미들웨어여야 한다 (SPEC §8).
 app.add_middleware(AuthMiddleware, auth=auth)
+# 가장 바깥 미들웨어: 인증 실패(401)·리다이렉트(302) 응답을 포함한 모든 응답에 보안 헤더 (SPEC §11)
+app.add_middleware(SecurityHeadersMiddleware)
 
 
 @app.get("/healthz")
@@ -212,6 +214,10 @@ async def _relay_chaos(node_id: str, body: dict | None):
              r.status_code)
     if r.error is not None:
         raise HTTPException(status_code=r.status_code or 502, detail=f"{r.error.type}: {r.error.message}")
+    if r.status_code in (401, 403):
+        # agent가 console 토큰을 거부 = 설정 오류. 그대로 넘기면 브라우저가 console 세션 만료로 오인해 로그아웃된다.
+        raise HTTPException(status_code=502, detail=f"agent rejected console token (HTTP {r.status_code}); "
+                                                    f"check AGENT_TOKEN for {node_id}")
     return JSONResponse(status_code=r.status_code or 200, content=r.body)
 
 

@@ -166,6 +166,8 @@ class SessionStore:
 class LoginLimiter:
     """클라이언트 IP별 연속 실패 횟수. max_failures회 연속 실패 → lockout_sec 동안 차단."""
 
+    MAX_TRACKED = 10_000  # 다수 IP로 실패를 흘려도 메모리가 무한히 늘지 않게
+
     def __init__(self, max_failures: int, lockout_sec: int) -> None:
         self.max_failures = max_failures
         self.lockout_sec = lockout_sec
@@ -181,6 +183,8 @@ class LoginLimiter:
         if until and until <= time.monotonic():
             count = 0  # 차단이 풀린 뒤에는 처음부터 센다
         count += 1
+        if len(self._state) >= self.MAX_TRACKED and ip not in self._state:
+            self._prune()
         if count >= self.max_failures:
             self._state[ip] = (0, time.monotonic() + self.lockout_sec)
             log.warning("event=login_locked client=%s lockout_sec=%d", ip, self.lockout_sec)
@@ -189,6 +193,13 @@ class LoginLimiter:
 
     def reset(self, ip: str) -> None:
         self._state.pop(ip, None)
+
+    def _prune(self) -> None:
+        """차단 중이 아닌 항목(누적 실패만 있는 IP, 차단이 풀린 IP)을 정리한다. 차단 중인 IP는 유지."""
+        now = time.monotonic()
+        for ip in [ip for ip, (_, until) in self._state.items() if until <= now]:
+            del self._state[ip]
+        log.warning("event=login_limiter_pruned remaining=%d", len(self._state))
 
 
 class Authenticator:
@@ -286,6 +297,35 @@ class AuthMiddleware:
         else:
             response = RedirectResponse(LOGIN_PATH, status_code=302)
         await response(scope, receive, send)
+
+
+SECURITY_HEADERS = [
+    (b"x-frame-options", b"DENY"),
+    (b"content-security-policy", b"frame-ancestors 'none'"),
+    (b"x-content-type-options", b"nosniff"),
+    (b"referrer-policy", b"same-origin"),
+]
+
+
+class SecurityHeadersMiddleware:
+    """모든 HTTP 응답에 보안 헤더를 붙인다. 제어 화면이 다른 사이트 iframe에 삽입되는 클릭재킹 방지."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def wrapped(message) -> None:
+            if message["type"] == "http.response.start":
+                names = {name for name, _ in SECURITY_HEADERS}
+                headers = [(k, v) for k, v in message.get("headers", []) if k.lower() not in names]
+                message = {**message, "headers": headers + SECURITY_HEADERS}
+            await send(message)
+
+        await self.app(scope, receive, wrapped)
 
 
 def _no_store(send: Send) -> Send:

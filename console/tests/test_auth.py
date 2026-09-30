@@ -171,3 +171,18 @@ def test_parse_basic():
     assert parse_basic("Bearer x") is None
     assert parse_basic("Basic !!!") is None
     assert parse_basic("Basic " + base64.b64encode(b"nocolon").decode()) is None
+
+
+def test_limiter_prunes_when_full(monkeypatch):
+    clock = patch_clock(monkeypatch)
+    lim = LoginLimiter(max_failures=2, lockout_sec=60)
+    monkeypatch.setattr(LoginLimiter, "MAX_TRACKED", 5)
+    lim.fail("locked")
+    lim.fail("locked")                     # 차단 중
+    for i in range(4):
+        lim.fail(f"ip{i}")                 # 누적 실패만 있는 IP 4개 → 합계 5개
+    lim.fail("new-ip")                     # 상한 도달 → 정리
+    assert lim.locked_for("locked") > 0    # 차단 중인 IP는 유지
+    assert len(lim._state) <= 2            # locked + new-ip
+    clock.t += 61
+    assert lim.locked_for("locked") == 0

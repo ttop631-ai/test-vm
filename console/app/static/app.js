@@ -223,7 +223,12 @@ function onRoute() {
 
 // ------------------------------------------------------------------ 노드 폴링
 
+let nodeTimer = null;
+
 async function pollNodes() {
+  clearTimeout(nodeTimer);
+  // 보이지 않는 탭은 폴링하지 않는다. 다시 보이면 visibilitychange에서 즉시 재개한다.
+  if (document.hidden) return;
   try {
     state.nodes = await api("/api/nodes");
     const { tab } = currentRoute();
@@ -238,7 +243,8 @@ async function pollNodes() {
   } catch (e) {
     // 연결 끊김 배너는 api()가 처리한다. 기존 화면 값은 유지.
   } finally {
-    setTimeout(pollNodes, NODE_POLL_MS);
+    clearTimeout(nodeTimer);
+    if (!document.hidden) nodeTimer = setTimeout(pollNodes, NODE_POLL_MS);
   }
 }
 
@@ -672,7 +678,7 @@ let detailTimer = null;
 
 async function loadHistory() {
   clearTimeout(historyTimer);
-  if (currentRoute().tab !== "history" || state.jobDetailId) return;
+  if (document.hidden || currentRoute().tab !== "history" || state.jobDetailId) return;
   try {
     await loadActions();
     const jobs = await api("/api/jobs?limit=50");
@@ -725,7 +731,7 @@ function closeJob() {
 async function loadJobDetail() {
   clearTimeout(detailTimer);
   const jobId = state.jobDetailId;
-  if (!jobId || currentRoute().tab !== "history") return;
+  if (document.hidden || !jobId || currentRoute().tab !== "history") return;
   try {
     await loadActions();
     const job = await api(`/api/jobs/${encodeURIComponent(jobId)}`);
@@ -888,7 +894,7 @@ function mergeEvents(rows) {
 
 async function loadEvents() {
   clearTimeout(eventsTimer);
-  if (currentRoute().tab !== "events") return;
+  if (document.hidden || currentRoute().tab !== "events") return;
   syncEventFilter();
   try {
     const rows = await api(eventsQuery());
@@ -1106,6 +1112,14 @@ async function init() {
   });
   $("#event-more").addEventListener("click", loadMoreEvents);
   window.addEventListener("hashchange", onRoute);
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) return;
+    // 다시 보이면 즉시 갱신하고 폴링을 재개한다 (각 로더는 기존 타이머를 지우고 시작하므로 중복되지 않는다)
+    pollNodes();
+    const { tab } = currentRoute();
+    if (tab === "history") (state.jobDetailId ? loadJobDetail : loadHistory)();
+    else if (tab === "events") loadEvents();
+  });
   window.addEventListener("resize", () => {
     if (currentRoute().tab === "status") renderPanels();
   });
