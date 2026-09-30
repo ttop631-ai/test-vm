@@ -1,0 +1,50 @@
+# NodeWatch — S1: mock agent 3개 (SPEC §2, §12)
+# 노드 포트는 호스트에 노출하지 않는다. 검증용 포트 바인딩은 compose.dev.yml 참고.
+
+x-agent: &agent
+  build: ./agent
+  image: nodewatch-agent:local
+  restart: unless-stopped
+  mem_limit: 96m
+  networks:
+    - nodenet
+  healthcheck:
+    test: ["CMD", "python", "-c", "import os, urllib.request; urllib.request.urlopen('http://localhost:%s/livez' % os.environ.get('AGENT_PORT', '9000'), timeout=2)"]
+    interval: 10s
+    timeout: 3s
+    retries: 3
+    start_period: 5s
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  node-a:
+    <<: *agent
+    environment:
+      NODE_ID: node-a
+      NODE_NAME: 병원 A
+      PROFILE: normal
+      AGENT_TOKEN: ${AGENT_TOKEN_A:-dev-token-a}
+
+  node-b:
+    <<: *agent
+    environment:
+      NODE_ID: node-b
+      NODE_NAME: 병원 B
+      PROFILE: disk_pressure
+      AGENT_TOKEN: ${AGENT_TOKEN_B:-dev-token-b}
+
+  node-c:
+    <<: *agent
+    environment:
+      NODE_ID: node-c
+      NODE_NAME: 병원 C
+      PROFILE: daemon_down
+      AGENT_TOKEN: ${AGENT_TOKEN_C:-dev-token-c}
+
+networks:
+  nodenet:
+    internal: true

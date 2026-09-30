@@ -1,0 +1,19 @@
+# 로컬 검증 전용 override. 운영·데모 배포에는 사용하지 않는다.
+#   docker compose -f docker-compose.yml -f compose.dev.yml up -d --build
+#
+# internal 네트워크에만 붙은 컨테이너는 포트 publish가 되지 않으므로
+# 검증용 bridge 네트워크(devnet)를 추가로 붙이고 127.0.0.1에만 바인딩한다.
+
+services:
+  node-a:
+    networks: [nodenet, devnet]
+    ports: ["127.0.0.1:9001:9000"]
+  node-b:
+    networks: [nodenet, devnet]
+    ports: ["127.0.0.1:9002:9000"]
+  node-c:
+    networks: [nodenet, devnet]
+    ports: ["127.0.0.1:9003:9000"]
+
+networks:
+  devnet: {}
