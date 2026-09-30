@@ -91,7 +91,12 @@ async def _restart_daemon(sim: Simulator, params: dict) -> tuple[int, str]:
         return 1, f"{d.name} is already restarting"
     was = d.status
     d.status, d.pid, d.started_mono = RESTARTING, None, None
-    await asyncio.sleep(random.uniform(3, 5))
+    try:
+        await asyncio.sleep(random.uniform(3, 5))
+    except asyncio.CancelledError:
+        # 재시작 도중 취소: RESTARTING에 고정되면 이후 재시작이 모두 거부되므로 STOPPED로 둔다 (SPEC §3.3)
+        d.status = STOPPED
+        raise
     d.status, d.pid = RUNNING, new_pid()
     d.started_mono = time.monotonic()
     stop_line = f"stopping {d.name} ... ok" if was != STOPPED else f"stopping {d.name} ... not running"
@@ -170,6 +175,15 @@ class CommandStore:
                  self.sim.node_id, command_id, action, params)
         try:
             exit_code, output = await HANDLERS[action](self.sim, params)
+        except asyncio.CancelledError:
+            # 취소돼도 결과를 남겨 같은 command_id가 영구 RUNNING이 되거나 다시 실행되지 않게 한다 (SPEC §3.3)
+            self._store(command_id, {
+                "command_id": command_id, "state": "DONE", "exit_code": 1, "output": "cancelled",
+                "started_at": started_at, "finished_at": utc_now_iso(),
+            })
+            log.warning("event=command_cancelled node_id=%s command_id=%s action=%s",
+                        self.sim.node_id, command_id, action)
+            raise
         except Exception as e:
             log.exception("event=command_error node_id=%s command_id=%s action=%s",
                           self.sim.node_id, command_id, action)

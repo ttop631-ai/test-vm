@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import logging
+import math
 import os
 import time
 import uuid
@@ -39,13 +40,19 @@ class Settings:
         token = os.environ.get("AGENT_TOKEN", "")
         if not token:
             raise RuntimeError("AGENT_TOKEN is required")
+        tick_sec = float(os.environ.get("TICK_SEC", "2"))
+        hold_sec = float(os.environ.get("BLACKHOLE_MAX_HOLD_SEC", "60"))
+        # 0 이하·NaN·무한대는 기동 거부 (TICK_SEC=0이면 시뮬레이터 busy loop) (SPEC §3.1)
+        for name, value in (("TICK_SEC", tick_sec), ("BLACKHOLE_MAX_HOLD_SEC", hold_sec)):
+            if not math.isfinite(value) or value <= 0:
+                raise RuntimeError(f"{name} must be a positive finite number, got {value!r}")
         return cls(
             node_id=os.environ.get("NODE_ID", "node-x"),
             node_name=os.environ.get("NODE_NAME", os.environ.get("NODE_ID", "node-x")),
             agent_token=token,
             profile=os.environ.get("PROFILE", "normal"),
-            tick_sec=float(os.environ.get("TICK_SEC", "2")),
-            blackhole_max_hold_sec=float(os.environ.get("BLACKHOLE_MAX_HOLD_SEC", "60")),
+            tick_sec=tick_sec,
+            blackhole_max_hold_sec=hold_sec,
         )
 
 
@@ -99,6 +106,7 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
         log.info("event=agent_stop node_id=%s", settings.node_id)
 
 
