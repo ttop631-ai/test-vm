@@ -63,6 +63,7 @@ h2 { font-size: 15px; margin: 0; }
 }
 .tabs a:hover { background: var(--bg); color: var(--text); }
 .tabs a.active { background: var(--accent); color: #fff; }
+.userbox { margin-left: auto; display: flex; align-items: center; gap: 10px; }
 
 .banner {
   background: var(--banner); color: #fff; padding: 8px 20px; font-weight: 600;
@@ -261,6 +262,26 @@ details.output pre {
 .chaos-row input[type=number] { width: 100px; }
 .chaos-state { font-size: 12px; color: var(--muted); margin-top: 8px; }
 .chaos-state.active { color: var(--warn); font-weight: 600; }
+
+/* ---------------------------------------------------------------- login */
+
+.login-page { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+.login-wrap { display: flex; flex-direction: column; align-items: center; gap: 8px; width: 100%; max-width: 380px; padding: 24px 16px; }
+.login-logo { width: 100%; max-width: 320px; height: auto; display: block; }
+.login-card {
+  width: 100%; background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: var(--shadow); padding: 22px 22px 18px;
+}
+.login-card h1 { font-size: 16px; margin: 0 0 16px; text-align: center; }
+.login-card input {
+  font: inherit; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--panel); color: var(--text); width: 100%;
+}
+.login-card input:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
+.login-btn { width: 100%; padding: 9px 14px; margin-top: 4px; }
+.login-card .error-text { margin: 0 0 10px; font-size: 13px; }
+/* 로고는 검은 글자라 어두운 배경에서는 반전해 보이게 한다 */
+@media (prefers-color-scheme: dark) { .login-logo { filter: invert(1); } }
 
 /* ---------------------------------------------------------------- dialog */
 

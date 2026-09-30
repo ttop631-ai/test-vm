@@ -151,6 +151,11 @@ async function api(path, { method = "GET", body } = {}) {
     throw new ApiError(0, "콘솔에 연결할 수 없습니다");
   }
   setConnected(true);
+  if (resp.status === 401) {
+    // 세션 만료 또는 console 재기동으로 세션이 사라짐 → 로그인 페이지로
+    location.replace("/login");
+    throw new ApiError(401, "로그인이 필요합니다");
+  }
   let data = null;
   try {
     data = await resp.json();
@@ -1052,7 +1057,26 @@ function updateDemoBadges() {
 
 // ------------------------------------------------------------------ 시작
 
+async function loadUser() {
+  try {
+    const me = await api("/api/me");
+    $("#current-user").textContent = me.username;
+  } catch (e) {
+    // 401이면 api()가 로그인 페이지로 이동시킨다
+  }
+}
+
+async function logout() {
+  try {
+    await fetch("/api/logout", { method: "POST", cache: "no-store" });
+  } finally {
+    location.replace("/login");
+  }
+}
+
 function init() {
+  $("#logout-btn").addEventListener("click", logout);
+  loadUser();
   $("#select-all").addEventListener("change", (ev) => {
     state.selected = ev.target.checked ? new Set(state.nodes.map((n) => n.node_id)) : new Set();
     renderTargets();

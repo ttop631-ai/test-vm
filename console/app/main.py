@@ -1,4 +1,4 @@
-"""FastAPI 앱. lifespan에서 poller 시작/정지, 기동 시 job 복구. HTTP Basic 인증은 미들웨어."""
+"""FastAPI 앱. lifespan에서 poller 시작/정지, 기동 시 job 복구. 인증(로그인 세션 + Basic)은 미들웨어."""
 from __future__ import annotations
 
 import asyncio
@@ -10,17 +10,17 @@ from typing import Any
 
 from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from .actions import CATALOG
 from .agent_client import AgentClient
-from .auth import BasicAuthMiddleware
+from .auth import SESSION_COOKIE, AuthMiddleware, Authenticator, client_ip
 from .config import Settings
 from .db import Database
 from .jobs import JobError, JobService, utc_now_iso
-from .models import (JobCreate, JobCreated, JobDetail, JobSummary, NodeDetail, NodeEvent, NodeView,
-                     RetryRequest)
+from .models import (JobCreate, JobCreated, JobDetail, JobSummary, LoginRequest, NodeDetail, NodeEvent,
+                     NodeView, RetryRequest)
 from .poller import Poller
 from .registry import load_nodes
 
@@ -62,6 +62,12 @@ def _on_background_done(task: asyncio.Task) -> None:
 
 
 settings = Settings()
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+auth = Authenticator(
+    username=settings.admin_user, password=settings.admin_password,
+    session_ttl_sec=settings.session_ttl_sec, max_failures=settings.login_max_failures,
+    lockout_sec=settings.login_lockout_sec, cookie_secure=settings.cookie_secure,
+)
 
 
 @asynccontextmanager
@@ -101,12 +107,55 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="NodeWatch console", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 # StaticFiles mount까지 보호하려면 라우터 dependency가 아니라 미들웨어여야 한다 (SPEC §8).
-app.add_middleware(BasicAuthMiddleware, username=settings.admin_user, password=settings.admin_password)
+app.add_middleware(AuthMiddleware, auth=auth)
 
 
 @app.get("/healthz")
 async def healthz():
     return {"status": "ok"}
+
+
+# ---------------------------------------------------------------- 로그인 (SPEC §8)
+
+@app.get("/login", include_in_schema=False)
+async def login_page(request: Request):
+    if auth.sessions.get(request.cookies.get(SESSION_COOKIE)):
+        return RedirectResponse("/", status_code=302)
+    return FileResponse(STATIC_DIR / "login.html", headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/login")
+async def login(req: LoginRequest, request: Request):
+    ip = client_ip(request.scope)
+    wait = auth.limiter.locked_for(ip)
+    if wait:
+        log.warning("event=login_rejected client=%s reason=locked retry_after=%d", ip, wait)
+        return JSONResponse({"detail": f"로그인 시도가 너무 많습니다. {wait}초 후 다시 시도하세요."},
+                            status_code=429, headers={"Retry-After": str(wait)})
+    if not auth.check(req.username, req.password):
+        auth.limiter.fail(ip)
+        log.warning("event=login_failed client=%s", ip)
+        return JSONResponse({"detail": "아이디 또는 비밀번호가 올바르지 않습니다."}, status_code=401)
+    auth.limiter.reset(ip)
+    auth.sessions.delete(request.cookies.get(SESSION_COOKIE))  # 세션 고정 방지: 항상 새 토큰
+    response = JSONResponse({"username": req.username})
+    auth.set_cookie(response, auth.sessions.create(req.username))
+    log.info("event=login_ok user=%s client=%s", req.username, ip)
+    return response
+
+
+@app.post("/api/logout")
+async def logout(request: Request):
+    auth.sessions.delete(request.cookies.get(SESSION_COOKIE))
+    response = JSONResponse({"ok": True})
+    auth.clear_cookie(response)
+    log.info("event=logout user=%s", request.state.user)
+    return response
+
+
+@app.get("/api/me")
+async def me(request: Request):
+    return {"username": request.state.user}
 
 
 @app.get("/api/nodes", response_model=list[NodeView])
@@ -161,7 +210,7 @@ async def list_events(limit: int = Query(100, ge=1, le=500), node_id: str | None
 # ---------------------------------------------------------------- actions / jobs (S3)
 
 def _requested_by(request: Request) -> str:
-    # BasicAuthMiddleware가 인증된 사용자명을 넣는다. 인증 없이 여기에 도달하는 경로는 없다.
+    # AuthMiddleware가 인증된 사용자명을 넣는다. 인증 없이 여기에 도달하는 경로는 없다.
     return request.state.user
 
 
@@ -222,4 +271,4 @@ async def retry_job(job_id: str, request: Request, req: RetryRequest | None = Bo
 
 # ---------------------------------------------------------------- 정적 대시보드 (S4)
 # API 라우트를 모두 등록한 뒤 마지막에 mount해야 /api/*가 가려지지 않는다.
-app.mount("/", StaticFiles(directory=Path(__file__).resolve().parent / "static", html=True), name="static")
+app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

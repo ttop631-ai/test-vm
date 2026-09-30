@@ -82,6 +82,13 @@ class NodeView(BaseModel):
     last_error: LastError | None
 
 
+class LoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    username: str = Field(max_length=128)
+    password: str = Field(max_length=256)
+
+
 class NodeEvent(BaseModel):
     """상태 전이 이벤트 (SPEC §4.4). from_status가 null이면 console 기동 후 첫 판정."""
 

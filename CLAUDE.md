@@ -39,7 +39,8 @@
 │   ├── nodes.json
 │   ├── tests/
 │   │   ├── test_status.py
-│   │   └── test_events.py
+│   │   ├── test_events.py
+│   │   └── test_auth.py
 │   └── app/
 │       ├── main.py          # FastAPI 앱, lifespan에서 poller 시작/정지, 기동 시 job 복구
 │       ├── config.py        # 환경변수 → Settings

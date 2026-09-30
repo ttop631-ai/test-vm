@@ -13,6 +13,10 @@ class Settings(BaseSettings):
     # 대시보드·API HTTP Basic 인증 (SPEC §2.2). 데모 배포 시 비밀번호 변경.
     admin_user: str = "admin"
     admin_password: str = Field(default="nodewatch", repr=False)
+    session_ttl_sec: int = Field(default=28800, ge=60)   # 로그인 세션 절대 만료 (8시간)
+    cookie_secure: bool = False                          # HTTPS 뒤에 둘 때 true
+    login_max_failures: int = Field(default=5, ge=1)     # IP별 연속 실패 n회 →
+    login_lockout_sec: int = Field(default=60, ge=1)     # n초 차단 (429)
 
     # 노드 레지스트리 (SPEC §2.1)
     nodes_file: Path = _DEFAULT_NODES_FILE

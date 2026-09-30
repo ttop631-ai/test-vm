@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NodeWatch 로그인</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="login-page">
+  <main class="login-wrap">
+    <img class="login-logo" src="img.png" alt="SEERS">
+    <form id="login-form" class="login-card" autocomplete="on" novalidate>
+      <h1>NodeWatch <span class="muted">병원 노드 원격 점검</span></h1>
+      <label class="field">
+        <span>아이디</span>
+        <input id="username" name="username" type="text" autocomplete="username" required autofocus>
+      </label>
+      <label class="field">
+        <span>비밀번호</span>
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+      </label>
+      <p id="login-error" class="error-text" role="alert" hidden></p>
+      <button id="login-btn" class="btn primary login-btn" type="submit">로그인</button>
+    </form>
+  </main>
+  <script>
+    "use strict";
+    // 로그인 페이지 전용 스크립트. 성공하면 세션 쿠키(HttpOnly)가 설정되고 대시보드로 이동한다.
+    const form = document.getElementById("login-form");
+    const err = document.getElementById("login-error");
+    const btn = document.getElementById("login-btn");
+
+    form.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const username = form.username.value.trim();
+      const password = form.password.value;
+      if (!username || !password) {
+        showError("아이디와 비밀번호를 입력하세요.");
+        return;
+      }
+      btn.disabled = true;
+      err.hidden = true;
+      try {
+        const resp = await fetch("/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username, password }),
+          cache: "no-store",
+        });
+        if (resp.ok) {
+          location.replace("/");
+          return;
+        }
+        let detail = `로그인 실패 (HTTP ${resp.status})`;
+        try {
+          const data = await resp.json();
+          if (data && typeof data.detail === "string") detail = data.detail;
+        } catch (e) { /* 본문 없음 */ }
+        showError(detail);
+        form.password.value = "";
+        form.password.focus();
+      } catch (e) {
+        showError("콘솔에 연결할 수 없습니다.");
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    function showError(text) {
+      err.textContent = text;
+      err.hidden = false;
+    }
+  </script>
+</body>
+</html>
