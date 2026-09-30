@@ -56,8 +56,10 @@ compose 파일에 `${VAR:-default}`로 기본값을 두어 `.env` 없이도 `doc
 | 변수 | 기본값 | 용도 |
 |---|---|---|
 | `CONSOLE_PORT` | `8080` | 호스트 노출 포트 (AWS 데모는 `80`) |
-| `ADMIN_USER` | `admin` | 대시보드 로그인 계정 (API는 Basic 헤더로도 사용) |
-| `ADMIN_PASSWORD` | `nodewatch` | 대시보드 로그인 비밀번호 (데모 배포 시 변경) |
+| `ADMIN_USER` | `admin` | 관리자 계정 (역할 `admin`: 전체 기능). API는 Basic 헤더로도 사용 |
+| `ADMIN_PASSWORD_HASH` | `nodewatch`의 해시 | 관리자 비밀번호 **scrypt 해시** (`scrypt:N:r:p:salt:hash`, base64url). 생성: `python -m app.auth hash`. 평문 `ADMIN_PASSWORD`가 설정돼 있으면 기동 거부 |
+| `MONITOR_USER` | `monuser` | 모니터링 계정 (역할 `monitor`: 조회 전용). 빈 값이면 비활성 |
+| `MONITOR_PASSWORD_HASH` | `monwatch`의 해시 | 모니터링 계정 비밀번호 scrypt 해시 |
 | `SESSION_TTL_SEC` | `28800` | 로그인 세션 유효 시간 (8시간, 절대 만료) |
 | `COOKIE_SECURE` | `false` | 세션 쿠키 `Secure` 속성. HTTPS 뒤에 둘 때 `true` |
 | `LOGIN_MAX_FAILURES` / `LOGIN_LOCKOUT_SEC` | `5` / `60` | 같은 클라이언트 IP의 연속 로그인 실패 n회 → n초 차단 (Basic 헤더 실패 포함) |
@@ -275,7 +277,18 @@ compose 파일에 `${VAR:-default}`로 기본값을 두어 `.env` 없이도 `doc
   - 스크립트: `Authorization: Basic` 헤더도 허용한다. 인증 창 팝업을 띄우지 않도록 `WWW-Authenticate`는 보내지 않는다.
   - 무인증 공개 경로: `/healthz`, `/login`, `/api/login`, `/style.css`, `/img.png`.
   - 무인증 요청: `/api/*` → 401 JSON, 그 외 GET/HEAD → 302 `/login`, 그 외 메서드 → 401.
-  - 비교는 `hmac.compare_digest`. 로그인·Basic 실패는 클라이언트 IP별로 세어 `LOGIN_MAX_FAILURES`회 연속이면 `LOGIN_LOCKOUT_SEC`초 동안 429.
+  - 비밀번호는 scrypt(N=2^14, r=8, p=1, salt 16B) 해시로만 보관하고 `hmac.compare_digest`로 비교한다. 해시 계산(약 50ms)은 이벤트 루프를 막지 않도록 스레드에서 실행한다. 없는 사용자명도 더미 해시를 계산해 응답 시간으로 계정 존재 여부가 드러나지 않게 한다.
+  - 로그인·Basic 실패는 클라이언트 IP별로 세어 `LOGIN_MAX_FAILURES`회 연속이면 `LOGIN_LOCKOUT_SEC`초 동안 429.
+  - 기동 시 비밀번호가 기본값(`nodewatch`, `monwatch`)이면 경고 로그를 남긴다.
+
+**역할 (기본 차단)**
+
+| 역할 | 허용 | 그 외 |
+|---|---|---|
+| `admin` | 전체 | — |
+| `monitor` | `GET /api/*` (단, `/api/nodes/{id}/chaos` 제외), `POST /api/logout`, 정적 파일 | 403 `{"detail": "권한이 없습니다 (monitor)"}` — 일괄 명령, reconcile, retry, 장애 주입(chaos) 조회·변경 |
+
+- 권한 검사는 인증 미들웨어에서 한다 (라우트가 추가돼도 monitor는 기본 차단).
 - 오류 응답은 FastAPI 기본 형식 `{"detail": "..."}`.
 - 요청자(`requested_by`)는 인증된 사용자명으로 기록한다.
 
@@ -285,7 +298,7 @@ compose 파일에 `${VAR:-default}`로 기본값을 두어 `.env` 없이도 `doc
 | GET | `/login` | 로그인 페이지 (무인증). 이미 로그인돼 있으면 302 `/` | 200 / 302 |
 | POST | `/api/login` | `{"username","password"}` → 세션 쿠키 발급 (무인증) | 200 `{"username"}` / 401 / 429 |
 | POST | `/api/logout` | 세션 삭제, 쿠키 만료 | 200 |
-| GET | `/api/me` | 현재 사용자 | 200 `{"username"}` |
+| GET | `/api/me` | 현재 사용자와 역할 | 200 `{"username", "role"}` (`admin` / `monitor`) |
 | GET | `/api/nodes` | 전체 노드 현재 상태 | 200 `NodeView[]` |
 | GET | `/api/nodes/{node_id}` | 단일 노드 + 최근 샘플 `SAMPLES_MAX`건 | 200 / 404 |
 | GET | `/api/actions` | 액션 카탈로그 | 200 |
@@ -445,7 +458,8 @@ CREATE INDEX IF NOT EXISTS idx_node_events_node ON node_events(node_id, id DESC)
 ## 10. 대시보드
 
 - 정적 파일: `index.html`, `app.js`, `style.css`, `login.html`, `img.png`(로그인 화면 로고). 외부 CDN, 웹폰트, 빌드 단계 없음 (폐쇄망에서도 그대로 동작).
-- 로그인 페이지: 로고를 화면 중앙에 두고 그 아래 ID/PW 입력. 성공 시 `/`로 이동. 대시보드 상단에 사용자명과 [로그아웃]. API가 401을 돌려주면(세션 만료, console 재기동) 로그인 페이지로 이동한다.
+- 로그인 페이지: 로고를 화면 중앙에 두고 그 아래 ID/PW 입력. 성공 시 `/`로 이동. 대시보드 상단에 사용자명·역할과 [로그아웃]. API가 401을 돌려주면(세션 만료, console 재기동) 로그인 페이지로 이동한다.
+- `monitor` 역할: 일괄 제어·데모 제어 탭을 표시하지 않고, 해당 탭으로 직접 들어오면 상태 현황으로 보낸다. 실행 이력은 조회만 가능하며 [결과 재확인]·[실패 대상 재실행] 버튼을 표시하지 않는다. 역할을 확인하기 전에는 제어 탭을 숨긴 상태로 시작한다.
 - 모든 API 호출은 상대경로 (`/api/...`).
 - 시각은 API의 UTC 값을 브라우저 로컬 시간으로 변환해 표시.
 
@@ -469,6 +483,8 @@ CREATE INDEX IF NOT EXISTS idx_node_events_node ON node_events(node_id, id DESC)
 | 무단 agent 호출 | 노드별 토큰 `X-Agent-Token`, `hmac.compare_digest`. 토큰은 env로만 주입, 로그에 기록 금지 |
 | 노드 직접 노출 | 노드 포트 호스트 미노출, `nodenet` internal 네트워크 |
 | 대시보드 무단 접근 | 로그인 페이지 + 세션 쿠키(HttpOnly, SameSite=Strict), API는 Basic 헤더 허용. IP별 연속 실패 차단. 요청자 감사 기록 |
+| 비밀번호 노출 (`.env`, `docker inspect`) | 평문 대신 scrypt 해시만 보관 |
+| 조회 사용자의 오조작 | `monitor` 역할: 서버 미들웨어에서 제어 API 403, 화면에서 제어 탭·버튼 제거 |
 | CSRF | 세션 쿠키 SameSite=Strict (다른 사이트에서 온 요청에 쿠키 미전송) |
 | 과대 출력으로 인한 DB·화면 장애 | `OUTPUT_MAX_BYTES` 절단 + `output_truncated` 플래그 |
 

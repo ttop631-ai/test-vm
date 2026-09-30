@@ -107,7 +107,7 @@
 | S2 | console: registry, agent_client, poller, status (+ 단위 테스트), 검증용 최소 기동(main의 lifespan·`/healthz`·`GET /api/nodes[/{id}]`, compose console 서비스) | node-c `blackhole` 주입 시 node-a/b의 `last_success_at` 간격 5±1초 유지. node-c는 3회 실패 후 UNREACHABLE |
 | S3 | console: actions, jobs, db, reconcile, retry, 기동 시 복구 | `POST /api/jobs` 즉시 202. blackhole 노드는 UNKNOWN, 나머지 SUCCESS. chaos 해제 후 reconcile로 SUCCESS 확인 |
 | S4 | 대시보드 4개 탭 | 새로고침 없이 상태 갱신. HIGH 액션 확인 모달. console 중지 시 연결 끊김 배너 |
-| S5 | compose, auth(로그인 페이지 + 세션), `.env.example`, AWS 배포 | `docker compose up -d --build` 한 번으로 기동. 외부에서는 console 포트만 열림. 인증 없이 `/` → 302 `/login`, `/api/*` 401. 로그인 후 대시보드, 로그아웃 후 다시 302. 연속 실패 5회 → 429 |
+| S5 | compose, auth(로그인 페이지 + 세션), `.env.example`, AWS 배포 | `docker compose up -d --build` 한 번으로 기동. 외부에서는 console 포트만 열림. 인증 없이 `/` → 302 `/login`, `/api/*` 401. 로그인 후 대시보드, 로그아웃 후 다시 302. 연속 실패 5회 → 429. 비밀번호는 해시로만 보관. `monuser`(monitor)는 제어 API 403, 일괄 제어·데모 제어 탭 없음 |
 | S6a | 판정을 poller로 이동, 상태 전이 이벤트 저장(`node_events`), `GET /api/events`, 이벤트 타임라인 탭 (+ 단위 테스트) | node-c blackhole → `CRITICAL → UNREACHABLE` 1건, 해제 → `UNREACHABLE → CRITICAL` 1건. 상태 불변 주기에는 기록 없음. console 재기동 후에도 이력 유지, 첫 판정은 `from_status = null`. poller 정지 시 API는 UNREACHABLE(판정 갱신 중단) |
 
 ## 8. 커밋 규칙
