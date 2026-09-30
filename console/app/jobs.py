@@ -216,8 +216,7 @@ class JobService:
         if job is None:
             return
         if job["status"] == "INTERRUPTED":
-            # TODO(question): SPEC §8 "반영 후 job 상태 재계산"이 INTERRUPTED job에도 적용되는지 불명.
-            #   재기동으로 중단됐다는 사실을 이력에 남기기 위해 INTERRUPTED는 유지한다.
+            # SPEC §8: INTERRUPTED는 reconcile 후에도 유지한다 (중단 이력 보존). 대상별 결과만 갱신된다.
             return
         status = compute_job_status(await self.db.counts(job_id))
         finished_at = None if status == "RUNNING" else utc_now_iso()
