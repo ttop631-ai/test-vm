@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NodeWatch</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">NodeWatch <span class="sub">병원 노드 원격 점검</span></div>
+    <nav class="tabs" role="tablist">
+      <a href="#status" data-tab="status" role="tab">상태 현황</a>
+      <a href="#control" data-tab="control" role="tab">일괄 제어</a>
+      <a href="#history" data-tab="history" role="tab">실행 이력</a>
+      <a href="#demo" data-tab="demo" role="tab">데모 제어</a>
+    </nav>
+  </header>
+
+  <div id="banner" class="banner" hidden></div>
+
+  <main>
+    <!-- 1. 상태 현황 -->
+    <section id="tab-status" class="tab" hidden>
+      <div id="summary" class="summary"></div>
+      <div id="node-cards" class="cards"></div>
+      <h2 class="section-title">시계열 <span class="muted" id="series-range"></span></h2>
+      <div id="legend" class="legend"></div>
+      <div id="panels" class="panels"></div>
+    </section>
+
+    <!-- 2. 일괄 제어 -->
+    <section id="tab-control" class="tab" hidden>
+      <div class="control-grid">
+        <div class="box">
+          <div class="box-head">
+            <h2>대상 노드</h2>
+            <label class="check"><input type="checkbox" id="select-all"> 전체 선택</label>
+          </div>
+          <div id="target-list" class="target-list"></div>
+          <p id="unreachable-warning" class="warn-text" hidden></p>
+        </div>
+        <div class="box">
+          <div class="box-head"><h2>액션</h2></div>
+          <label class="field">
+            <span>액션</span>
+            <select id="action-select"></select>
+          </label>
+          <div id="action-meta" class="action-meta"></div>
+          <div id="param-form"></div>
+          <button id="run-btn" class="btn primary" disabled>실행</button>
+          <p id="run-error" class="error-text" hidden></p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. 실행 이력 -->
+    <section id="tab-history" class="tab" hidden>
+      <div id="job-detail" hidden></div>
+      <div id="job-list-wrap">
+        <div class="box-head"><h2>실행 이력</h2><button id="history-refresh" class="btn">새로고침</button></div>
+        <div class="table-wrap">
+          <table class="table" id="job-table">
+            <thead><tr><th>시각</th><th>액션</th><th>대상</th><th>결과</th><th>요청자</th><th>상태</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. 데모 제어 -->
+    <section id="tab-demo" class="tab" hidden>
+      <p class="demo-note"><strong>데모 전용</strong> — 노드 agent에 장애를 주입합니다. 운영 환경에는 존재하지 않는 기능입니다.</p>
+      <div id="chaos-cards" class="cards"></div>
+    </section>
+  </main>
+
+  <dialog id="confirm-dialog">
+    <form method="dialog">
+      <h2 id="confirm-title"></h2>
+      <div id="confirm-body"></div>
+      <div class="dialog-actions">
+        <button value="cancel" class="btn">취소</button>
+        <button value="ok" class="btn danger" id="confirm-ok">실행</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="tooltip" class="tooltip" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>

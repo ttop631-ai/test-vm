@@ -1,6 +1,6 @@
 """FastAPI 앱. lifespan에서 poller 시작/정지.
 
-인증 미들웨어(S5), 정적 대시보드(S4)는 이후 단계에서 추가한다.
+인증 미들웨어는 S5에서 추가한다.
 """
 from __future__ import annotations
 
@@ -8,11 +8,13 @@ import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from .actions import CATALOG
 from .agent_client import AgentClient
@@ -197,3 +199,8 @@ async def retry_job(job_id: str, request: Request, req: RetryRequest | None = Bo
     except JobError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
     return JobCreated(job_id=new_id)
+
+
+# ---------------------------------------------------------------- 정적 대시보드 (S4)
+# API 라우트를 모두 등록한 뒤 마지막에 mount해야 /api/*가 가려지지 않는다.
+app.mount("/", StaticFiles(directory=Path(__file__).resolve().parent / "static", html=True), name="static")
