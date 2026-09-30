@@ -307,7 +307,7 @@ compose 파일에 `${VAR:-default}`로 기본값을 두어 `.env` 없이도 `doc
 | GET | `/api/jobs/{job_id}` | 상세 + 노드별 결과·출력 | 200 / 404 |
 | POST | `/api/jobs/{job_id}/reconcile` | UNKNOWN 대상 결과 재조회 | 202 |
 | POST | `/api/jobs/{job_id}/retry` | 실패 대상 재실행 (새 job) | 202 `{job_id}` |
-| GET/POST | `/api/nodes/{node_id}/chaos` | 데모용 장애 주입 중계 | 200 |
+| GET/POST | `/api/nodes/{node_id}/chaos` | 데모용 장애 주입 중계. agent 응답 코드를 전달하되 agent의 401/403(토큰 설정 오류)과 전송 실패는 502 — 브라우저가 console 세션 만료로 오인하지 않게 | 200 / 400 / 502 |
 | GET | `/api/events?limit=100&node_id=&before_id=` | 상태 전이 이벤트 (최신순). `node_id`로 필터, `before_id`로 이전 페이지 | 200 `NodeEvent[]` / 400 |
 
 **POST /api/jobs**
@@ -459,6 +459,7 @@ CREATE INDEX IF NOT EXISTS idx_node_events_node ON node_events(node_id, id DESC)
 
 - 정적 파일: `index.html`, `app.js`, `style.css`, `login.html`, `img.png`(로그인 화면 로고). 외부 CDN, 웹폰트, 빌드 단계 없음 (폐쇄망에서도 그대로 동작).
 - 로그인 페이지: 로고를 화면 중앙에 두고 그 아래 ID/PW 입력. 성공 시 `/`로 이동. 대시보드 상단에 사용자명·역할과 [로그아웃]. API가 401을 돌려주면(세션 만료, console 재기동) 로그인 페이지로 이동한다.
+- 브라우저 탭이 백그라운드(`document.hidden`)이면 폴링을 멈추고, 다시 보이면 즉시 갱신한다 (보이지 않는 화면이 샘플 전체를 반복 조회하지 않게).
 - `monitor` 역할: 일괄 제어·데모 제어 탭을 표시하지 않고, 해당 탭으로 직접 들어오면 상태 현황으로 보낸다. 실행 이력은 조회만 가능하며 [결과 재확인]·[실패 대상 재실행] 버튼을 표시하지 않는다. 역할을 확인하기 전에는 제어 탭을 숨긴 상태로 시작한다.
 - 모든 API 호출은 상대경로 (`/api/...`).
 - 시각은 API의 UTC 값을 브라우저 로컬 시간으로 변환해 표시.
@@ -486,6 +487,8 @@ CREATE INDEX IF NOT EXISTS idx_node_events_node ON node_events(node_id, id DESC)
 | 비밀번호 노출 (`.env`, `docker inspect`) | 평문 대신 scrypt 해시만 보관 |
 | 조회 사용자의 오조작 | `monitor` 역할: 서버 미들웨어에서 제어 API 403, 화면에서 제어 탭·버튼 제거 |
 | CSRF | 세션 쿠키 SameSite=Strict (다른 사이트에서 온 요청에 쿠키 미전송) |
+| 클릭재킹 (제어 화면을 다른 사이트 iframe에 삽입) | 모든 응답에 `X-Frame-Options: DENY`, `Content-Security-Policy: frame-ancestors 'none'`. 그 외 `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin` |
+| 로그인 실패 카운터 메모리 증가 (다수 IP) | IP 상태 보관 상한 10,000개. 넘으면 차단 중이 아닌 항목부터 정리 |
 | 과대 출력으로 인한 DB·화면 장애 | `OUTPUT_MAX_BYTES` 절단 + `output_truncated` 플래그 |
 
 범위 밖 (README 한계 절에 기술): TLS/mTLS, 토큰 로테이션, RBAC, 2인 승인.
