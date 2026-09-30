@@ -5,7 +5,7 @@
 | 항목 | 값 |
 |---|---|
 | **라이브 데모** | **http://TBD_EC2_PUBLIC_IP/** |
-| **계정** | `admin` / `TBD_DEMO_PASSWORD` (브라우저 HTTP Basic 인증 창에 입력) |
+| **계정** | `admin` / `TBD_DEMO_PASSWORD` (접속하면 나오는 로그인 페이지에 입력) |
 | 운영 기간 | TBD ~ 평가 종료 시까지 |
 | 로컬 실행 | `docker compose up -d --build` → http://localhost:8080 (`admin` / `nodewatch`) |
 
@@ -82,7 +82,7 @@ flowchart LR
 |---|---|
 | console / poller | 5초 주기로 전 노드 병렬 수집, 노드별 연속 실패·지연 추적, 상태 판정, 상태가 바뀌면 이벤트 기록 |
 | console / job worker | 일괄 명령을 백그라운드로 노드별 병렬 실행 (노드별 직렬화 + 전역 동시성 상한), 결과 기록 |
-| console / API + UI | REST API와 정적 대시보드를 같은 오리진에서 제공, HTTP Basic 인증 |
+| console / API + UI | REST API와 정적 대시보드를 같은 오리진에서 제공. 로그인 페이지 + 세션 쿠키 (API 스크립트는 Basic 헤더) |
 | agent (node-a/b/c) | 더미 메트릭·데몬 상태 시뮬레이션, 화이트리스트 명령 실행, 장애 주입(chaos) |
 | SQLite | job 이력, 노드별 결과·반환 로그, 상태 전이 이벤트 영속화 (헬스 샘플은 메모리 ring buffer) |
 
@@ -156,7 +156,9 @@ docker run --rm -v "$PWD/console:/src:ro" -w /src python:3.12-slim \
 | 변수 | 기본값 | 설명 |
 |---|---|---|
 | `CONSOLE_PORT` | 8080 | 호스트 노출 포트 |
-| `ADMIN_USER` / `ADMIN_PASSWORD` | admin / nodewatch | 대시보드 계정 |
+| `ADMIN_USER` / `ADMIN_PASSWORD` | admin / nodewatch | 대시보드 로그인 계정 (API는 같은 값으로 Basic 헤더) |
+| `SESSION_TTL_SEC` | 28800 | 로그인 세션 유효 시간(초). console 재기동 시 세션은 사라짐 |
+| `LOGIN_MAX_FAILURES` / `LOGIN_LOCKOUT_SEC` | 5 / 60 | 같은 IP 연속 실패 n회 → n초 차단(429) |
 | `AGENT_TOKEN_A/B/C` | dev-token-a/b/c | console ↔ agent 인증 토큰 |
 | `POLL_INTERVAL_SEC` | 5 | 헬스체크 주기 |
 | `HEALTH_CONNECT_TIMEOUT` / `HEALTH_READ_TIMEOUT` | 1.0 / 3.0 | 헬스체크 타임아웃(초) |
@@ -241,13 +243,14 @@ docker compose up -d --build
 
 ### 6.5 보안
 
+- 대시보드는 로그인 페이지(ID/PW) → 세션 쿠키(HttpOnly, SameSite=Strict)로 보호한다. 인증 미들웨어가 정적 파일까지 막고, 무인증 요청은 로그인 페이지로 보낸다(API는 401). 같은 IP에서 5회 연속 실패하면 60초 차단한다. 인증이 필요한 응답은 `Cache-Control: no-store`로 브라우저에 남기지 않는다.
 - 대시보드와 API는 임의 명령 문자열을 받지 않는다. 명령은 카탈로그의 액션과 enum 파라미터로만 표현되며 console과 agent가 이중으로 검증한다.
 - console ↔ agent는 노드별 토큰으로 인증하고, agent 포트는 외부에 노출하지 않는다 (`nodenet` internal 네트워크).
 - 요청자와 실행 결과를 모두 기록하고, 노드가 돌려주는 출력은 64KB로 잘라 저장한다.
 
 ### 6.6 폐쇄망 친화
 
-프론트엔드는 빌드 단계와 외부 CDN 없이 정적 파일 3개로 구성했다. 인터넷이 차단된 병원망에서도 이미지만 반입하면 그대로 동작한다. 외부 SaaS 의존도 없다.
+프론트엔드는 빌드 단계와 외부 CDN 없이 정적 파일(대시보드 3개 + 로그인 페이지·로고)로 구성했다. 인터넷이 차단된 병원망에서도 이미지만 반입하면 그대로 동작한다. 외부 SaaS 의존도 없다.
 
 ### 6.7 실환경 적용 시 달라질 점
 
@@ -269,6 +272,7 @@ docker compose up -d --build
 | poller 내부 예외 | 루프 레벨 예외 처리 | 로그 후 루프 유지 | 수집 지연 시 전체 stale 표시 | 자동 |
 | console 재기동 | 기동 시 RUNNING job 조회 | INTERRUPTED 처리 | PENDING→FAILED, RUNNING→UNKNOWN | 결과 재확인 / 재실행 |
 | console 자체 접속 불가 | 대시보드 fetch 실패 | 기존 값 유지 + 흐림 처리 | "콘솔 연결 끊김 — 마지막 갱신 시각" 배너 | 자동 폴링 |
+| 세션 만료 · console 재기동 | API 401 | 로그인 페이지로 이동 (보던 탭은 로그인 후 복귀) | 로그인 화면 | 재로그인 |
 | 과대 출력 | 크기 검사 | 64KB 절단 | "출력 일부 생략" 표시 | — |
 | 유휴 연결 재사용 경합 | `RemoteProtocolError` | keep-alive 순서 고정: 수집 주기(5s) < console 연결 만료(15s) < agent keep-alive(30s) | (발생하지 않도록 설정으로 예방) | — |
 | poller 정지 | 마지막 판정 시각 경과 | API가 저장 판정 대신 통신두절 반환 | "판정 갱신 중단 n초 (poller 정지 의심)" | 자동 (poller 재기동) |
@@ -304,6 +308,8 @@ docker compose up -d --build
 | 통신 방향 | console → agent (Pull) | agent 발신형 연결, 중계 서버 |
 | 전송 보안 | HTTP + 노드별 토큰 | TLS/mTLS, 토큰 로테이션 |
 | 권한 | 단일 관리자 계정 | 조회/실행 권한 분리, HIGH 위험도 2인 승인 |
+| 세션 | console 메모리 (재기동 시 재로그인), HTTP 평문 | 세션 외부 저장, HTTPS + `COOKIE_SECURE=true` |
+| 로그인 차단 | 클라이언트 IP 기준 | 앞단 프록시가 있으면 원 IP 전달 필요 (그렇지 않으면 전체가 한 IP로 묶여 차단이 전역화) |
 | 대규모 실행 | 전역 동시성 상한 | canary 1대 → 나머지 순차 롤아웃, 점검 시간대 예약 |
 | 결과 재확인 | 수동 | 일정 시간 후 자동 reconcile |
 | 이력·지표 | SQLite, 메모리 샘플 | 시계열 DB, 알림 연계 |
