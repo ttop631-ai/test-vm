@@ -73,6 +73,7 @@ compose 파일에 `${VAR:-default}`로 기본값을 두어 `.env` 없이도 `doc
 | `AGENT_TOKEN` | (비밀) | 요청 헤더 `X-Agent-Token`과 비교 |
 | `PROFILE` | `normal` / `disk_pressure` / `daemon_down` | 초기 상태 프로필 |
 | `TICK_SEC` | `2` | 메트릭 갱신 주기 |
+| `AGENT_KEEPALIVE_SEC` | `30` | HTTP keep-alive 유지 시간 (uvicorn `--timeout-keep-alive`). console의 `HTTP_KEEPALIVE_EXPIRY`보다 길어야 한다 (§5) |
 
 ### 3.2 시뮬레이션
 
@@ -211,6 +212,7 @@ compose 파일에 `${VAR:-default}`로 기본값을 두어 `.env` 없이도 `doc
 | `POLL_CONCURRENCY` | 20 | 노드 수가 늘어도 console 소켓·CPU 보호 |
 | `FAIL_THRESHOLD` | 3 | 1회 실패로 장애 판정하지 않음 (오탐 억제) |
 | `STALE_FACTOR` | 3 | poller 자체 이상(루프 정지 등) 감지. 기준은 `last_attempt_at` — `last_success_at` 기준이면 실패 기록이 read timeout만큼 늦어 노드 장애 시 `FAIL_THRESHOLD`보다 먼저 걸린다 |
+| `HTTP_KEEPALIVE_EXPIRY` | 15s | console → agent idle 연결 재사용 상한. **수집 주기(5s) < 이 값 < agent `AGENT_KEEPALIVE_SEC`(30s)**. 두 값이 같으면(과거 기본값 5s = 5s = 주기) 서버가 닫는 순간 연결을 재사용해 `RemoteProtocolError`가 가끔 발생한다 (헬스: 가짜 실패 이벤트, 명령: 가짜 UNKNOWN) |
 | `CMD_CONNECT_TIMEOUT` | 2.0s | |
 | `CMD_READ_TIMEOUT` | 15s | 최장 액션(재시작 ~5s)의 3배 여유 |
 | `JOB_CONCURRENCY` | 10 | 동시에 명령을 받는 노드 수 상한 |
