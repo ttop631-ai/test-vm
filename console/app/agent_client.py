@@ -106,6 +106,8 @@ class AgentClient:
         limits = httpx.Limits(
             max_connections=settings.poll_concurrency + settings.job_concurrency,
             max_keepalive_connections=settings.poll_concurrency + settings.job_concurrency,
+            # agent가 idle 연결을 닫는 시점과 재사용이 겹치지 않도록 서버 keep-alive보다 짧게 둔다.
+            keepalive_expiry=settings.http_keepalive_expiry,
         )
         self._client = httpx.AsyncClient(limits=limits, follow_redirects=False)
 

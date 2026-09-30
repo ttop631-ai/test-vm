@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     poll_concurrency: int = 20
     fail_threshold: int = 3
     stale_factor: float = 3.0
+    # idle 연결 재사용 상한. 수집 주기 < 이 값 < agent keep-alive(30s) (SPEC §5)
+    http_keepalive_expiry: float = 15.0
     cmd_connect_timeout: float = 2.0
     cmd_read_timeout: float = 15.0
     job_concurrency: int = 10
