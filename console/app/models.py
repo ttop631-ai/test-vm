@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, PlainSerializer
+from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, model_validator
 
 
 def to_utc_z(dt: datetime) -> str:
@@ -43,6 +43,23 @@ class HealthPayload(BaseModel):
     daemons: list[DaemonInfo]
 
 
+class CommandPayload(BaseModel):
+    """agent POST /commands, GET /commands/{id}. 불일치하면 AGENT_ERROR → UNKNOWN (SPEC §6)."""
+
+    command_id: str
+    state: Literal["DONE", "RUNNING"]
+    exit_code: int | None = None
+    output: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+
+    @model_validator(mode="after")
+    def _done_has_exit_code(self) -> CommandPayload:
+        if self.state == "DONE" and self.exit_code is None:
+            raise ValueError("DONE without exit_code")
+        return self
+
+
 # ---------------------------------------------------------------- console API
 
 class LastError(BaseModel):
@@ -77,3 +94,58 @@ class NodeDetail(NodeView):
     """GET /api/nodes/{node_id}: NodeView + 최근 샘플 60건."""
 
     samples: list[Sample]
+
+
+# ---------------------------------------------------------------- jobs (S3)
+
+JobStatus = Literal["RUNNING", "COMPLETED", "PARTIAL", "FAILED", "INTERRUPTED"]
+ResultStatus = Literal["PENDING", "RUNNING", "SUCCESS", "FAILED", "UNKNOWN"]
+
+
+class JobCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    targets: Literal["all"] | list[str]
+    action: str
+    params: dict = Field(default_factory=dict)
+
+
+class RetryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    include_unknown: bool = False
+
+
+class JobCreated(BaseModel):
+    job_id: str
+
+
+class JobResult(BaseModel):
+    node_id: str
+    command_id: str
+    status: ResultStatus
+    error_type: str | None
+    error_message: str | None
+    exit_code: int | None
+    output: str | None
+    output_truncated: bool
+    reconciled: bool
+    started_at: str | None
+    finished_at: str | None
+    duration_ms: int | None
+
+
+class JobSummary(BaseModel):
+    job_id: str
+    parent_job_id: str | None
+    action: str
+    params: dict
+    requested_by: str
+    status: JobStatus
+    created_at: str
+    finished_at: str | None
+    counts: dict[str, int]
+
+
+class JobDetail(JobSummary):
+    results: list[JobResult]

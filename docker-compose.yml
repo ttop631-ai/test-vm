@@ -29,6 +29,8 @@ services:
     networks:
       - public
       - nodenet
+    volumes:
+      - nodewatch-data:/data
     environment:
       AGENT_TOKEN_A: ${AGENT_TOKEN_A:-dev-token-a}
       AGENT_TOKEN_B: ${AGENT_TOKEN_B:-dev-token-b}
@@ -68,6 +70,9 @@ services:
       NODE_NAME: 병원 C
       PROFILE: daemon_down
       AGENT_TOKEN: ${AGENT_TOKEN_C:-dev-token-c}
+
+volumes:
+  nodewatch-data: {}
 
 networks:
   public: {}

@@ -1,7 +1,6 @@
 """FastAPI 앱. lifespan에서 poller 시작/정지.
 
-S2 범위: /healthz, GET /api/nodes, GET /api/nodes/{node_id}.
-job 복구(S3), 인증 미들웨어(S5), 정적 대시보드(S4)는 이후 단계에서 추가한다.
+인증 미들웨어(S5), 정적 대시보드(S4)는 이후 단계에서 추가한다.
 """
 from __future__ import annotations
 
@@ -9,12 +8,18 @@ import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
+from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Body, FastAPI, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
+from .actions import CATALOG
 from .agent_client import AgentClient
 from .config import Settings
-from .models import NodeDetail, NodeView
+from .db import Database
+from .jobs import JobError, JobService, utc_now_iso
+from .models import JobCreate, JobCreated, JobDetail, JobSummary, NodeDetail, NodeView, RetryRequest
 from .poller import Poller
 from .registry import load_nodes
 
@@ -61,8 +66,17 @@ async def lifespan(app: FastAPI):
     nodes = load_nodes(settings.nodes_file)
     client = AgentClient(settings)
     poller = Poller(nodes, client, settings)
+    db = await Database.open(settings.db_path)
+    # 기동 시 복구: 이전 프로세스에서 끊긴 job 정리 (SPEC §9)
+    interrupted = await db.recover_interrupted(utc_now_iso())
+    for job_id in interrupted:
+        log.warning("event=job_interrupted job_id=%s", job_id)
+    jobs = JobService(db, nodes, client, settings)
     app.state.settings = settings
+    app.state.nodes = nodes
+    app.state.client = client
     app.state.poller = poller
+    app.state.jobs = jobs
 
     task = asyncio.create_task(poller.run(), name="poller")
     _background.add(task)
@@ -73,6 +87,8 @@ async def lifespan(app: FastAPI):
     finally:
         task.cancel()
         await poller.stop()
+        await jobs.stop()
+        await db.close()
         await client.aclose()
         log.info("event=console_stop")
 
@@ -96,3 +112,88 @@ async def get_node(node_id: str):
     if node_id not in poller.states:
         raise HTTPException(status_code=404, detail=f"unknown node: {node_id}")
     return poller.detail(node_id)
+
+
+@app.get("/api/nodes/{node_id}/chaos")
+async def get_node_chaos(node_id: str):
+    return await _relay_chaos(node_id, None)
+
+
+@app.post("/api/nodes/{node_id}/chaos")
+async def post_node_chaos(node_id: str, body: dict[str, Any] = Body(...)):
+    return await _relay_chaos(node_id, body)
+
+
+async def _relay_chaos(node_id: str, body: dict | None):
+    """데모용 장애 주입 중계. agent 응답 코드를 그대로 돌려주고, 전송 실패는 502."""
+    node = app.state.nodes.get(node_id)
+    if node is None:
+        raise HTTPException(status_code=404, detail=f"unknown node: {node_id}")
+    r = await app.state.client.chaos(node, body)
+    log.info("event=chaos_relay node_id=%s method=%s status=%s", node_id, "GET" if body is None else "POST",
+             r.status_code)
+    if r.error is not None:
+        raise HTTPException(status_code=r.status_code or 502, detail=f"{r.error.type}: {r.error.message}")
+    return JSONResponse(status_code=r.status_code or 200, content=r.body)
+
+
+# ---------------------------------------------------------------- actions / jobs (S3)
+
+def _requested_by(request: Request) -> str:
+    # TODO(question): 인증 미들웨어는 S5 범위. 그 전까지는 request.state.user가 없어 "anonymous"로 기록된다.
+    return getattr(request.state, "user", None) or "anonymous"
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error(request: Request, exc: RequestValidationError):
+    # SPEC §8: 허용되지 않은 요청은 400 {"detail": "..."}
+    errors = "; ".join(f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors())
+    return JSONResponse(status_code=400, content={"detail": errors})
+
+
+@app.get("/api/actions")
+async def list_actions():
+    return CATALOG
+
+
+@app.post("/api/jobs", status_code=202, response_model=JobCreated)
+async def create_job(req: JobCreate, request: Request):
+    try:
+        job_id = await app.state.jobs.create(req.targets, req.action, req.params, _requested_by(request))
+    except JobError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    return JobCreated(job_id=job_id)
+
+
+@app.get("/api/jobs", response_model=list[JobSummary])
+async def list_jobs(limit: int = Query(50, ge=1, le=500)):
+    return await app.state.jobs.list(limit)
+
+
+@app.get("/api/jobs/{job_id}", response_model=JobDetail)
+async def get_job(job_id: str):
+    detail = await app.state.jobs.detail(job_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail=f"unknown job: {job_id}")
+    return detail
+
+
+@app.post("/api/jobs/{job_id}/reconcile", status_code=202)
+async def reconcile_job(job_id: str):
+    try:
+        await app.state.jobs.start_reconcile(job_id)
+    except LookupError:
+        raise HTTPException(status_code=404, detail=f"unknown job: {job_id}") from None
+    return {"job_id": job_id}
+
+
+@app.post("/api/jobs/{job_id}/retry", status_code=202, response_model=JobCreated)
+async def retry_job(job_id: str, request: Request, req: RetryRequest | None = Body(None)):
+    include_unknown = req.include_unknown if req else False
+    try:
+        new_id = await app.state.jobs.retry(job_id, include_unknown, _requested_by(request))
+    except LookupError:
+        raise HTTPException(status_code=404, detail=f"unknown job: {job_id}") from None
+    except JobError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    return JobCreated(job_id=new_id)

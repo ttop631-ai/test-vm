@@ -11,6 +11,8 @@ _DEFAULT_NODES_FILE = Path(__file__).resolve().parent.parent / "nodes.json"
 class Settings(BaseSettings):
     # 노드 레지스트리 (SPEC §2.1)
     nodes_file: Path = _DEFAULT_NODES_FILE
+    # 저장소 (SPEC §9)
+    db_path: Path = Path("/data/nodewatch.db")
 
     # 타임아웃·동시성 예산 (SPEC §5)
     poll_interval_sec: float = 5.0
