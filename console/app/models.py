@@ -82,6 +82,18 @@ class NodeView(BaseModel):
     last_error: LastError | None
 
 
+class NodeEvent(BaseModel):
+    """상태 전이 이벤트 (SPEC §4.4). from_status가 null이면 console 기동 후 첫 판정."""
+
+    id: int
+    node_id: str
+    node_name: str
+    ts: str
+    from_status: NodeStatus | None
+    to_status: NodeStatus
+    reasons: list[str]
+
+
 class Sample(BaseModel):
     ts: UtcDatetime
     cpu: float

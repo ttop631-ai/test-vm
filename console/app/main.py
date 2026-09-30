@@ -19,7 +19,8 @@ from .auth import BasicAuthMiddleware
 from .config import Settings
 from .db import Database
 from .jobs import JobError, JobService, utc_now_iso
-from .models import JobCreate, JobCreated, JobDetail, JobSummary, NodeDetail, NodeView, RetryRequest
+from .models import (JobCreate, JobCreated, JobDetail, JobSummary, NodeDetail, NodeEvent, NodeView,
+                     RetryRequest)
 from .poller import Poller
 from .registry import load_nodes
 
@@ -69,8 +70,8 @@ async def lifespan(app: FastAPI):
         log.warning("event=default_admin_password msg='ADMIN_PASSWORD is the default; change it before exposing the console'")
     nodes = load_nodes(settings.nodes_file)
     client = AgentClient(settings)
-    poller = Poller(nodes, client, settings)
     db = await Database.open(settings.db_path)
+    poller = Poller(nodes, client, settings, events=db)
     # 기동 시 복구: 이전 프로세스에서 끊긴 job 정리 (SPEC §9)
     interrupted = await db.recover_interrupted(utc_now_iso())
     for job_id in interrupted:
@@ -81,6 +82,7 @@ async def lifespan(app: FastAPI):
     app.state.client = client
     app.state.poller = poller
     app.state.jobs = jobs
+    app.state.db = db
 
     task = asyncio.create_task(poller.run(), name="poller")
     _background.add(task)
@@ -141,6 +143,19 @@ async def _relay_chaos(node_id: str, body: dict | None):
     if r.error is not None:
         raise HTTPException(status_code=r.status_code or 502, detail=f"{r.error.type}: {r.error.message}")
     return JSONResponse(status_code=r.status_code or 200, content=r.body)
+
+
+@app.get("/api/events", response_model=list[NodeEvent])
+async def list_events(limit: int = Query(100, ge=1, le=500), node_id: str | None = None,
+                      before_id: int | None = Query(None, ge=1)):
+    """상태 전이 이벤트 (SPEC §4.4). 최신순, before_id로 이전 페이지."""
+    nodes = app.state.nodes
+    if node_id is not None and node_id not in nodes:
+        raise HTTPException(status_code=400, detail=f"unknown node_id: {node_id}")
+    rows = await app.state.db.list_events(limit, node_id, before_id)
+    # 레지스트리에서 빠진 노드의 과거 이벤트는 node_id를 이름으로 쓴다.
+    return [NodeEvent(**r, node_name=nodes[r["node_id"]].name if r["node_id"] in nodes else r["node_id"])
+            for r in rows]
 
 
 # ---------------------------------------------------------------- actions / jobs (S3)

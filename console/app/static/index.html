@@ -13,6 +13,7 @@
       <a href="#status" data-tab="status" role="tab">상태 현황</a>
       <a href="#control" data-tab="control" role="tab">일괄 제어</a>
       <a href="#history" data-tab="history" role="tab">실행 이력</a>
+      <a href="#events" data-tab="events" role="tab">이벤트</a>
       <a href="#demo" data-tab="demo" role="tab">데모 제어</a>
     </nav>
   </header>
@@ -68,7 +69,20 @@
       </div>
     </section>
 
-    <!-- 4. 데모 제어 -->
+    <!-- 4. 이벤트 -->
+    <section id="tab-events" class="tab" hidden>
+      <div class="box-head">
+        <h2>상태 전이 이벤트 <span class="muted">판정 상태가 바뀔 때만 기록됩니다</span></h2>
+        <label class="field inline">
+          <span>노드</span>
+          <select id="event-node"><option value="">전체</option></select>
+        </label>
+      </div>
+      <div id="event-timeline" class="timeline"></div>
+      <div class="more"><button id="event-more" class="btn" hidden>더 보기</button></div>
+    </section>
+
+    <!-- 5. 데모 제어 -->
     <section id="tab-demo" class="tab" hidden>
       <p class="demo-note"><strong>데모 전용</strong> — 노드 agent에 장애를 주입합니다. 운영 환경에는 존재하지 않는 기능입니다.</p>
       <div id="chaos-cards" class="cards"></div>

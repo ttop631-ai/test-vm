@@ -41,6 +41,17 @@ CREATE TABLE IF NOT EXISTS job_results (
 );
 
 CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS node_events (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  node_id       TEXT NOT NULL,
+  ts            TEXT NOT NULL,
+  from_status   TEXT,
+  to_status     TEXT NOT NULL,
+  reasons_json  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_node_events_node ON node_events(node_id, id DESC);
 """
 
 RESULT_STATUSES = ("PENDING", "RUNNING", "SUCCESS", "FAILED", "UNKNOWN")
@@ -145,7 +156,39 @@ class Database:
                 raise
         return job_ids
 
+    async def insert_event(self, node_id: str, ts: str, from_status: str | None, to_status: str,
+                           reasons: list[str]) -> None:
+        async with self._write_lock:
+            await self.conn.execute(
+                "INSERT INTO node_events (node_id, ts, from_status, to_status, reasons_json) VALUES (?, ?, ?, ?, ?)",
+                (node_id, ts, from_status, to_status, json.dumps(reasons, ensure_ascii=False)),
+            )
+            await self.conn.commit()
+
+    async def prune_events(self, before_ts: str) -> int:
+        async with self._write_lock:
+            cur = await self.conn.execute("DELETE FROM node_events WHERE ts < ?", (before_ts,))
+            await self.conn.commit()
+            return cur.rowcount
+
     # ------------------------------------------------------------ reads
+
+    async def list_events(self, limit: int, node_id: str | None = None, before_id: int | None = None) -> list[dict]:
+        sql = "SELECT * FROM node_events WHERE 1 = 1"
+        args: list[Any] = []
+        if node_id is not None:
+            sql += " AND node_id = ?"
+            args.append(node_id)
+        if before_id is not None:
+            sql += " AND id < ?"
+            args.append(before_id)
+        cur = await self.conn.execute(sql + " ORDER BY id DESC LIMIT ?", (*args, limit))
+        rows = []
+        for r in await cur.fetchall():
+            d = dict(r)
+            d["reasons"] = json.loads(d.pop("reasons_json"))
+            rows.append(d)
+        return rows
 
     async def get_job_row(self, job_id: str) -> dict | None:
         cur = await self.conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,))

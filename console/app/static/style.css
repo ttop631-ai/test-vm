@@ -227,7 +227,33 @@ details.output pre {
 }
 .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; }
 
-/* ---------------------------------------------------------------- tab 4: demo */
+/* ---------------------------------------------------------------- tab 4: events */
+
+.field.inline { flex-direction: row; align-items: center; gap: 8px; margin: 0; }
+.timeline { display: flex; flex-direction: column; gap: 6px; }
+.tl-date { margin: 14px 0 2px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.tl-date:first-child { margin-top: 0; }
+.tl-item {
+  display: grid; grid-template-columns: 76px 150px 1fr auto; gap: 12px; align-items: start;
+  background: var(--panel); border: 1px solid var(--border); border-left: 4px solid var(--unknown);
+  border-radius: 6px; padding: 8px 12px;
+}
+.tl-item.to-HEALTHY { border-left-color: var(--ok); }
+.tl-item.to-WARNING { border-left-color: var(--warn); }
+.tl-item.to-CRITICAL, .tl-item.to-UNREACHABLE { border-left-color: var(--crit); }
+.tl-time { font-variant-numeric: tabular-nums; font-size: 13px; }
+.tl-node .id { color: var(--muted); font-size: 12px; margin-left: 4px; }
+.tl-change { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.tl-change .arrow { color: var(--muted); }
+.tl-reasons { margin: 4px 0 0; padding-left: 18px; font-size: 12px; color: var(--muted); }
+.tl-held { font-size: 12px; color: var(--muted); white-space: nowrap; text-align: right; }
+.more { text-align: center; margin-top: 12px; }
+@media (max-width: 760px) {
+  .tl-item { grid-template-columns: 64px 1fr; }
+  .tl-held { grid-column: 2; text-align: left; }
+}
+
+/* ---------------------------------------------------------------- tab 5: demo */
 
 .demo-note { background: var(--panel); border: 1px dashed var(--warn); color: var(--text); padding: 8px 12px; border-radius: 8px; }
 .chaos-row { display: flex; align-items: center; gap: 8px; margin: 8px 0; flex-wrap: wrap; }

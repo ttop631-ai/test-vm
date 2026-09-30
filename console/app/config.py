@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     job_concurrency: int = 10
     output_max_bytes: int = 65536
     samples_max: int = Field(default=60, ge=1, le=17280)  # 노드별 메모리 샘플 수 (60 × 5s = 5분)
+    events_retention_days: int = Field(default=30, ge=1)  # 상태 전이 이벤트 보관 기간 (SPEC §4.4)
 
     # 메트릭 임계치 (SPEC §4.3)
     cpu_warn_pct: float = 80

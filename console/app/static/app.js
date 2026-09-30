@@ -6,6 +6,8 @@
 const NODE_POLL_MS = 3000;
 const JOB_POLL_MS = 2000;
 const HISTORY_POLL_MS = 5000;
+const EVENTS_POLL_MS = 5000;
+const EVENTS_PAGE = 100;
 const MIN_WINDOW_MS = 5 * 60 * 1000;   // 시계열 최소 표시 창. 보유 샘플이 더 길면 창을 늘린다 (SAMPLES_MAX)
 const TICK_STEPS_MIN = [1, 2, 5, 10, 15, 30, 60, 120, 180, 360, 720]; // x축 눈금 후보 (분)
 const SERIES_GAP_MS = 12500;            // 샘플 간격이 이보다 크면 수집 실패 구간으로 보고 선을 끊는다
@@ -51,6 +53,9 @@ const state = {
   openOutputs: new Set(),
   reconcileUntil: 0,
   hover: null,          // {key, clientX, clientY}
+  events: [],           // 로드된 이벤트 (id 내림차순)
+  eventsFilter: "",
+  eventsHasMore: false,
 };
 
 // ------------------------------------------------------------------ DOM 헬퍼
@@ -174,7 +179,7 @@ function setConnected(ok) {
 
 // ------------------------------------------------------------------ 라우팅 (hash)
 
-const TABS = ["status", "control", "history", "demo"];
+const TABS = ["status", "control", "history", "events", "demo"];
 
 function currentRoute() {
   const [tab, id] = location.hash.replace(/^#/, "").split("/");
@@ -193,6 +198,8 @@ function onRoute() {
   } else if (tab === "history") {
     if (id) openJob(id);
     else closeJob();
+  } else if (tab === "events") {
+    loadEvents();
   } else if (tab === "demo") {
     renderDemo();
   }
@@ -845,7 +852,121 @@ async function retry(job) {
   }
 }
 
-// ------------------------------------------------------------------ 탭 4: 데모 제어
+// ------------------------------------------------------------------ 탭 4: 이벤트 (상태 전이 타임라인)
+
+let eventsTimer = null;
+
+function eventsQuery(extra) {
+  const q = new URLSearchParams({ limit: String(EVENTS_PAGE) });
+  if (state.eventsFilter) q.set("node_id", state.eventsFilter);
+  for (const [k, v] of Object.entries(extra || {})) q.set(k, String(v));
+  return `/api/events?${q}`;
+}
+
+function mergeEvents(rows) {
+  const byId = new Map(state.events.map((e) => [e.id, e]));
+  for (const r of rows) byId.set(r.id, r);
+  state.events = [...byId.values()].sort((a, b) => b.id - a.id);
+}
+
+async function loadEvents() {
+  clearTimeout(eventsTimer);
+  if (currentRoute().tab !== "events") return;
+  syncEventFilter();
+  try {
+    const rows = await api(eventsQuery());
+    // 처음 로드면 "더 보기" 가능 여부를 정한다. 이후 폴링은 새 이벤트만 합친다.
+    if (!state.events.length) state.eventsHasMore = rows.length === EVENTS_PAGE;
+    mergeEvents(rows);
+    renderEvents();
+  } catch (e) {
+    // 연결 끊김은 배너가 처리한다
+  } finally {
+    if (currentRoute().tab === "events") eventsTimer = setTimeout(loadEvents, EVENTS_POLL_MS);
+  }
+}
+
+async function loadMoreEvents() {
+  if (!state.events.length) return;
+  const oldest = state.events[state.events.length - 1].id;
+  try {
+    const rows = await api(eventsQuery({ before_id: oldest }));
+    state.eventsHasMore = rows.length === EVENTS_PAGE;
+    mergeEvents(rows);
+    renderEvents();
+  } catch (e) {
+    alert(`이벤트를 더 불러오지 못했습니다: ${e.message}`);
+  }
+}
+
+function syncEventFilter() {
+  const sel = $("#event-node");
+  const want = ["", ...state.nodes.map((n) => n.node_id)];
+  const have = [...sel.options].map((o) => o.value);
+  if (want.join() !== have.join()) {
+    sel.replaceChildren(h("option", { value: "", text: "전체" }),
+      ...state.nodes.map((n) => h("option", { value: n.node_id, text: `${n.node_name} (${n.node_id})` })));
+    sel.value = state.eventsFilter;
+  }
+}
+
+function fmtHeld(ms) {
+  const sec = Math.round(ms / 1000);
+  if (sec < 60) return `${sec}초`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}분 ${sec % 60}초`;
+  const hr = Math.floor(min / 60);
+  if (hr < 48) return `${hr}시간 ${min % 60}분`;
+  return `${Math.floor(hr / 24)}일 ${hr % 24}시간`;
+}
+
+function renderEvents() {
+  const box = $("#event-timeline");
+  $("#event-more").hidden = !state.eventsHasMore;
+  if (!state.events.length) {
+    box.replaceChildren(h("p", { class: "muted", text: "기록된 상태 전이가 없습니다." }));
+    return;
+  }
+  // 이전 상태 지속 시간: 같은 노드의 바로 앞(더 오래된) 이벤트와의 간격
+  const prevOf = new Map();
+  const lastSeen = new Map();
+  for (let i = state.events.length - 1; i >= 0; i--) {
+    const e = state.events[i];
+    prevOf.set(e.id, lastSeen.get(e.node_id) || null);
+    lastSeen.set(e.node_id, e);
+  }
+
+  const items = [];
+  let lastDate = null;
+  for (const e of state.events) {
+    const d = new Date(e.ts);
+    const dateKey = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    if (dateKey !== lastDate) {
+      items.push(h("div", { class: "tl-date", text: dateKey }));
+      lastDate = dateKey;
+    }
+    const prev = prevOf.get(e.id);
+    let held = null;
+    if (e.from_status === null) held = "console 기동 후 첫 판정";
+    else if (prev) held = `${STATUS_LABEL[e.from_status] || e.from_status} ${fmtHeld(d - new Date(prev.ts))} 지속`;
+    items.push(h("div", { class: `tl-item to-${e.to_status}` },
+      h("div", { class: "tl-time", text: fmtClock(d) }),
+      h("div", { class: "tl-node" }, e.node_name, h("span", { class: "id", text: e.node_id })),
+      h("div", null,
+        h("div", { class: "tl-change" },
+          e.from_status ? badge(`s-${e.from_status}`, STATUS_LABEL[e.from_status] || e.from_status) : h("span", { class: "muted", text: "기동" }),
+          h("span", { class: "arrow", text: "→" }),
+          badge(`s-${e.to_status}`, STATUS_LABEL[e.to_status] || e.to_status),
+        ),
+        e.reasons.length ? h("ul", { class: "tl-reasons" }, e.reasons.map((r) => h("li", { text: r }))) : null,
+      ),
+      h("div", { class: "tl-held", text: held || "" }),
+    ));
+  }
+  box.replaceChildren(...items);
+}
+
+// ------------------------------------------------------------------ 탭 5: 데모 제어
 
 async function renderDemo() {
   await loadActions();
@@ -939,6 +1060,12 @@ function init() {
   $("#action-select").addEventListener("change", renderParamForm);
   $("#run-btn").addEventListener("click", onRun);
   $("#history-refresh").addEventListener("click", loadHistory);
+  $("#event-node").addEventListener("change", (ev) => {
+    state.eventsFilter = ev.target.value;
+    state.events = [];
+    loadEvents();
+  });
+  $("#event-more").addEventListener("click", loadMoreEvents);
   window.addEventListener("hashchange", onRoute);
   window.addEventListener("resize", () => {
     if (currentRoute().tab === "status") renderPanels();
