@@ -8,11 +8,19 @@ from pydantic_settings import BaseSettings
 
 _DEFAULT_NODES_FILE = Path(__file__).resolve().parent.parent / "nodes.json"
 
+# 로컬 개발용 기본 비밀번호의 scrypt 해시 (평문: nodewatch / monwatch). 기동 시 기본값이면 경고한다.
+# 배포 시 python -m app.auth hash 로 만든 값을 .env에 넣는다.
+DEFAULT_ADMIN_PASSWORD_HASH = "scrypt:16384:8:1:aoDLaDST1sgcQP-CvnOoaQ:5SoEo6qsVFhuLBADNWU3fVrjOASDC6ce6vVJOaMJ-T0"
+DEFAULT_MONITOR_PASSWORD_HASH = "scrypt:16384:8:1:XR6RbF9eIJXh4vFWfHDz9w:XIQnORzfQw7P0uB98lhLYd-ZVhmzFplqtT1Chk3isac"
+DEFAULT_PASSWORDS = {"admin": "nodewatch", "monitor": "monwatch"}
+
 
 class Settings(BaseSettings):
-    # 대시보드·API HTTP Basic 인증 (SPEC §2.2). 데모 배포 시 비밀번호 변경.
+    # 계정 (SPEC §2.2, §8). 비밀번호는 scrypt 해시로만 받는다.
     admin_user: str = "admin"
-    admin_password: str = Field(default="nodewatch", repr=False)
+    admin_password_hash: str = Field(default=DEFAULT_ADMIN_PASSWORD_HASH, repr=False)
+    monitor_user: str = "monuser"  # 빈 값이면 비활성
+    monitor_password_hash: str = Field(default=DEFAULT_MONITOR_PASSWORD_HASH, repr=False)
     session_ttl_sec: int = Field(default=28800, ge=60)   # 로그인 세션 절대 만료 (8시간)
     cookie_secure: bool = False                          # HTTPS 뒤에 둘 때 true
     login_max_failures: int = Field(default=5, ge=1)     # IP별 연속 실패 n회 →

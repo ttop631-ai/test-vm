@@ -53,6 +53,7 @@ const state = {
   openOutputs: new Set(),
   reconcileUntil: 0,
   hover: null,          // {key, clientX, clientY}
+  role: null,           // /api/me로 확인. 확인 전에는 제어 기능을 숨긴다
   events: [],           // 로드된 이벤트 (id 내림차순)
   eventsFilter: "",
   eventsHasMore: false,
@@ -185,6 +186,11 @@ function setConnected(ok) {
 // ------------------------------------------------------------------ 라우팅 (hash)
 
 const TABS = ["status", "control", "history", "events", "demo"];
+const MONITOR_TABS = ["status", "history", "events"]; // monitor(조회 전용): 일괄 제어·데모 제어 없음
+const ROLE_LABEL = { admin: "관리자", monitor: "조회 전용" };
+
+const isAdmin = () => state.role === "admin";
+const allowedTabs = () => (isAdmin() ? TABS : MONITOR_TABS);
 
 function currentRoute() {
   const [tab, id] = location.hash.replace(/^#/, "").split("/");
@@ -193,6 +199,11 @@ function currentRoute() {
 
 function onRoute() {
   const { tab, id } = currentRoute();
+  if (!allowedTabs().includes(tab)) {
+    // monitor가 #control·#demo로 직접 들어온 경우 (서버도 해당 API를 403으로 막는다)
+    location.replace("#status");
+    return;
+  }
   for (const t of TABS) $(`#tab-${t}`).hidden = t !== tab;
   document.querySelectorAll(".tabs a").forEach((a) => a.classList.toggle("active", a.dataset.tab === tab));
   if (tab === "status") {
@@ -747,7 +758,7 @@ function renderJobDetail(job) {
         h("h2", { style: "display:inline;margin-left:8px" }, actionName(job.action), " "),
         badge(`j-${job.status}`, JOB_LABEL[job.status] || job.status),
       ),
-      h("div", { class: "detail-actions" },
+      isAdmin() && h("div", { class: "detail-actions" },
         h("button", {
           class: "btn", disabled: unknown === 0 || running, onclick: () => reconcile(job),
           title: "결과 미확인(UNKNOWN) 대상의 실제 결과를 agent에 다시 조회합니다",
@@ -768,7 +779,8 @@ function renderJobDetail(job) {
       ),
       h("div", null, countsView(job.counts)),
       unknown
-        ? h("p", { class: "note", text: "결과 미확인: 명령이 이미 전달·실행됐을 수 있어 자동 재시도하지 않습니다. [결과 재확인]으로 agent의 실제 결과를 조회하세요." })
+        ? h("p", { class: "note", text: "결과 미확인: 명령이 이미 전달·실행됐을 수 있어 자동 재시도하지 않습니다. "
+          + (isAdmin() ? "[결과 재확인]으로 agent의 실제 결과를 조회하세요." : "관리자가 [결과 재확인]으로 실제 결과를 조회할 수 있습니다.") })
         : null,
       job.status === "INTERRUPTED"
         ? h("p", { class: "note", text: "console 재기동으로 중단된 job입니다. 대상별 결과는 재확인으로 갱신될 수 있지만 job 상태는 '중단됨'으로 유지됩니다." })
@@ -1060,9 +1072,12 @@ function updateDemoBadges() {
 async function loadUser() {
   try {
     const me = await api("/api/me");
-    $("#current-user").textContent = me.username;
+    state.role = me.role;
+    document.body.classList.add(`role-${me.role}`);
+    $("#current-user").replaceChildren(me.username,
+      h("span", { class: "role-tag", text: ROLE_LABEL[me.role] || me.role }));
   } catch (e) {
-    // 401이면 api()가 로그인 페이지로 이동시킨다
+    // 401이면 api()가 로그인 페이지로 이동시킨다. 그 외 실패면 역할 미확인 = 조회 기능만 표시.
   }
 }
 
@@ -1074,9 +1089,9 @@ async function logout() {
   }
 }
 
-function init() {
+async function init() {
   $("#logout-btn").addEventListener("click", logout);
-  loadUser();
+  await loadUser(); // 역할을 알아야 탭을 정할 수 있다
   $("#select-all").addEventListener("change", (ev) => {
     state.selected = ev.target.checked ? new Set(state.nodes.map((n) => n.node_id)) : new Set();
     renderTargets();

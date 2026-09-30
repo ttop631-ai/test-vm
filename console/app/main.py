@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -15,8 +16,9 @@ from fastapi.staticfiles import StaticFiles
 
 from .actions import CATALOG
 from .agent_client import AgentClient
-from .auth import SESSION_COOKIE, AuthMiddleware, Authenticator, client_ip
-from .config import Settings
+from .auth import (ROLE_ADMIN, ROLE_MONITOR, SESSION_COOKIE, Account, AuthMiddleware, Authenticator, client_ip,
+                   verify_password)
+from .config import DEFAULT_PASSWORDS, Settings
 from .db import Database
 from .jobs import JobError, JobService, utc_now_iso
 from .models import (JobCreate, JobCreated, JobDetail, JobSummary, LoginRequest, NodeDetail, NodeEvent,
@@ -63,17 +65,35 @@ def _on_background_done(task: asyncio.Task) -> None:
 
 settings = Settings()
 STATIC_DIR = Path(__file__).resolve().parent / "static"
-auth = Authenticator(
-    username=settings.admin_user, password=settings.admin_password,
-    session_ttl_sec=settings.session_ttl_sec, max_failures=settings.login_max_failures,
-    lockout_sec=settings.login_lockout_sec, cookie_secure=settings.cookie_secure,
-)
+
+
+def _build_authenticator(s: Settings) -> Authenticator:
+    # 평문 비밀번호 env가 남아 있으면 "바꿨다고 생각했는데 기본 해시로 열리는" 사고가 나므로 기동을 거부한다.
+    for legacy in ("ADMIN_PASSWORD", "MONITOR_PASSWORD"):
+        if os.environ.get(legacy):
+            raise RuntimeError(f"{legacy} (plaintext) is not supported; set {legacy}_HASH "
+                               f"(generate: python -m app.auth hash)")
+    accounts = [Account(s.admin_user, ROLE_ADMIN, s.admin_password_hash)]
+    if s.monitor_user:
+        accounts.append(Account(s.monitor_user, ROLE_MONITOR, s.monitor_password_hash))
+    authenticator = Authenticator(
+        accounts, session_ttl_sec=s.session_ttl_sec, max_failures=s.login_max_failures,
+        lockout_sec=s.login_lockout_sec, cookie_secure=s.cookie_secure,
+    )
+    for a in accounts:
+        if verify_password(DEFAULT_PASSWORDS[a.role], a.password_hash):
+            log.warning("event=default_password user=%s role=%s msg='default password in use; "
+                        "set %s before exposing the console'", a.username, a.role,
+                        "ADMIN_PASSWORD_HASH" if a.role == ROLE_ADMIN else "MONITOR_PASSWORD_HASH")
+    log.info("event=accounts_loaded users=%s", ",".join(f"{a.username}:{a.role}" for a in accounts))
+    return authenticator
+
+
+auth = _build_authenticator(settings)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    if settings.admin_password == "nodewatch":
-        log.warning("event=default_admin_password msg='ADMIN_PASSWORD is the default; change it before exposing the console'")
     nodes = load_nodes(settings.nodes_file)
     client = AgentClient(settings)
     db = await Database.open(settings.db_path)
@@ -132,15 +152,16 @@ async def login(req: LoginRequest, request: Request):
         log.warning("event=login_rejected client=%s reason=locked retry_after=%d", ip, wait)
         return JSONResponse({"detail": f"로그인 시도가 너무 많습니다. {wait}초 후 다시 시도하세요."},
                             status_code=429, headers={"Retry-After": str(wait)})
-    if not auth.check(req.username, req.password):
+    account = await auth.authenticate(req.username, req.password)
+    if account is None:
         auth.limiter.fail(ip)
         log.warning("event=login_failed client=%s", ip)
         return JSONResponse({"detail": "아이디 또는 비밀번호가 올바르지 않습니다."}, status_code=401)
     auth.limiter.reset(ip)
     auth.sessions.delete(request.cookies.get(SESSION_COOKIE))  # 세션 고정 방지: 항상 새 토큰
-    response = JSONResponse({"username": req.username})
-    auth.set_cookie(response, auth.sessions.create(req.username))
-    log.info("event=login_ok user=%s client=%s", req.username, ip)
+    response = JSONResponse({"username": account.username, "role": account.role})
+    auth.set_cookie(response, auth.sessions.create(account))
+    log.info("event=login_ok user=%s role=%s client=%s", account.username, account.role, ip)
     return response
 
 
@@ -155,7 +176,7 @@ async def logout(request: Request):
 
 @app.get("/api/me")
 async def me(request: Request):
-    return {"username": request.state.user}
+    return {"username": request.state.user, "role": request.state.role}
 
 
 @app.get("/api/nodes", response_model=list[NodeView])

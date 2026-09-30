@@ -64,6 +64,10 @@ h2 { font-size: 15px; margin: 0; }
 .tabs a:hover { background: var(--bg); color: var(--text); }
 .tabs a.active { background: var(--accent); color: #fff; }
 .userbox { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.role-tag { font-size: 11px; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border); color: var(--muted); margin-left: 4px; }
+/* 제어 기능은 역할을 확인하기 전까지 숨긴다 (서버도 monitor에게 403) */
+.admin-only { display: none !important; }
+body.role-admin .admin-only { display: revert !important; }
 
 .banner {
   background: var(--banner); color: #fff; padding: 8px 20px; font-weight: 600;
