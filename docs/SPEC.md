@@ -164,7 +164,7 @@ compose 파일에 `${VAR:-default}`로 기본값을 두어 `.env` 없이도 `doc
 
 ### 4.1 노드별 수집 상태 (메모리)
 
-`last_attempt_at`, `last_success_at`, `consecutive_failures`, `last_error {type, message}`, `latency_ms`, `last_health`(마지막 성공 payload), `skipped_cycles`, `samples`(최근 60건 ring buffer: ts, cpu, mem, disk, latency).
+`last_attempt_at`, `last_success_at`, `consecutive_failures`, `last_error {type, message}`, `latency_ms`, `last_health`(마지막 성공 payload), `skipped_cycles`, `samples`(최근 `SAMPLES_MAX`건 ring buffer: ts, cpu, mem, disk, latency. 성공한 수집만 기록하므로 실패 구간은 비어 있다).
 
 ### 4.2 판정 규칙 — 위에서부터 첫 번째로 맞는 규칙 적용
 
@@ -205,6 +205,7 @@ compose 파일에 `${VAR:-default}`로 기본값을 두어 `.env` 없이도 `doc
 | `CMD_READ_TIMEOUT` | 15s | 최장 액션(재시작 ~5s)의 3배 여유 |
 | `JOB_CONCURRENCY` | 10 | 동시에 명령을 받는 노드 수 상한 |
 | `OUTPUT_MAX_BYTES` | 65536 | 노드 반환 로그 저장 상한 |
+| `SAMPLES_MAX` | 60 | 노드별 메모리 샘플 수 (1~17280). 60 × 5s = 5분, 720 = 1시간. 대시보드 시계열 창은 보유 샘플 범위에 맞춰 늘어난다. 재기동 시 초기화 |
 
 규칙:
 
@@ -261,7 +262,7 @@ compose 파일에 `${VAR:-default}`로 기본값을 두어 `.env` 없이도 `doc
 |---|---|---|---|
 | GET | `/healthz` | 컨테이너 헬스체크 (무인증) | 200 `{"status":"ok"}` |
 | GET | `/api/nodes` | 전체 노드 현재 상태 | 200 `NodeView[]` |
-| GET | `/api/nodes/{node_id}` | 단일 노드 + 최근 샘플 60건 | 200 / 404 |
+| GET | `/api/nodes/{node_id}` | 단일 노드 + 최근 샘플 `SAMPLES_MAX`건 | 200 / 404 |
 | GET | `/api/actions` | 액션 카탈로그 | 200 |
 | POST | `/api/jobs` | 일괄 명령 생성 | 202 `{job_id}` / 400 |
 | GET | `/api/jobs?limit=50` | 이력 목록 (최신순) | 200 `JobSummary[]` |
