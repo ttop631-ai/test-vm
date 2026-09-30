@@ -5,9 +5,9 @@
 | 항목 | 값 |
 |---|---|
 | **라이브 데모** | **http://TBD_EC2_PUBLIC_IP/** |
-| **계정** | `admin` / `TBD_DEMO_PASSWORD` (접속하면 나오는 로그인 페이지에 입력) |
+| **계정** | 관리자 `admin` / `TBD_DEMO_PASSWORD`, 조회 전용 `monuser` / `TBD_MONITOR_PASSWORD` (접속하면 나오는 로그인 페이지에 입력) |
 | 운영 기간 | TBD ~ 평가 종료 시까지 |
-| 로컬 실행 | `docker compose up -d --build` → http://localhost:8080 (`admin` / `nodewatch`) |
+| 로컬 실행 | `docker compose up -d --build` → http://localhost:8080 (`admin` / `nodewatch`, 조회 전용 `monuser` / `monwatch`) |
 
 > 미기재 항목 확인: `grep -n TBD README.md history.md`
 
@@ -136,7 +136,8 @@ docker compose ps          # 4개 컨테이너 healthy 확인
 - 접속: http://localhost:8080 — `admin` / `nodewatch`
 - `.env` 없이 기본값으로 동작한다. 값을 바꾸려면 `cp .env.example .env` 후 수정.
 - 종료: `docker compose down` (이력까지 삭제: `docker compose down -v`)
-- 기본 비밀번호(`nodewatch`)로 기동하면 console 로그에 `event=default_admin_password` 경고가 남는다. 외부 노출 전 `.env`에서 변경.
+- 기본 비밀번호(`nodewatch`, `monwatch`)로 기동하면 console 로그에 `event=default_password` 경고가 남는다. 외부 노출 전 `.env`에서 해시를 바꾼다.
+- 비밀번호는 **scrypt 해시로만** 넣는다. 해시 생성: `docker compose run --rm console python -m app.auth hash` (입력한 비밀번호의 해시를 출력). 평문 `ADMIN_PASSWORD`가 있으면 console이 기동을 거부한다.
 
 개발·검증용:
 
@@ -156,7 +157,8 @@ docker run --rm -v "$PWD/console:/src:ro" -w /src python:3.12-slim \
 | 변수 | 기본값 | 설명 |
 |---|---|---|
 | `CONSOLE_PORT` | 8080 | 호스트 노출 포트 |
-| `ADMIN_USER` / `ADMIN_PASSWORD` | admin / nodewatch | 대시보드 로그인 계정 (API는 같은 값으로 Basic 헤더) |
+| `ADMIN_USER` / `ADMIN_PASSWORD_HASH` | admin / `nodewatch`의 해시 | 관리자 계정 (전체 기능). API는 같은 계정으로 Basic 헤더 |
+| `MONITOR_USER` / `MONITOR_PASSWORD_HASH` | monuser / `monwatch`의 해시 | 조회 전용 계정 (일괄 제어·데모 제어 불가, 제어 API 403). `MONITOR_USER`를 비우면 비활성 |
 | `SESSION_TTL_SEC` | 28800 | 로그인 세션 유효 시간(초). console 재기동 시 세션은 사라짐 |
 | `LOGIN_MAX_FAILURES` / `LOGIN_LOCKOUT_SEC` | 5 / 60 | 같은 IP 연속 실패 n회 → n초 차단(429) |
 | `AGENT_TOKEN_A/B/C` | dev-token-a/b/c | console ↔ agent 인증 토큰 |
@@ -198,14 +200,28 @@ sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
 
 # 기동
 git clone https://github.com/ttop631-ai/test-vm.git nodewatch && cd nodewatch
+docker compose build
+
+# 비밀번호 해시 생성 (각각 실행 후 출력된 scrypt:... 값을 아래 .env에 붙여 넣는다)
+docker compose run --rm console python -m app.auth hash   # 관리자
+docker compose run --rm console python -m app.auth hash   # 조회 전용
+
+# agent 토큰 생성 (3번 실행)
+python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+
 cat > .env <<'EOF'
 CONSOLE_PORT=80
-ADMIN_PASSWORD=TBD_DEMO_PASSWORD
+ADMIN_USER=admin
+ADMIN_PASSWORD_HASH=TBD
+MONITOR_USER=monuser
+MONITOR_PASSWORD_HASH=TBD
 AGENT_TOKEN_A=TBD
 AGENT_TOKEN_B=TBD
 AGENT_TOKEN_C=TBD
 EOF
-docker compose up -d --build
+chmod 600 .env
+docker compose up -d
+docker compose logs console | grep -E "accounts_loaded|default_password"   # default_password 경고가 없어야 한다
 ```
 
 컨테이너는 `restart: unless-stopped`로 인스턴스 재부팅 후 자동 기동된다.
@@ -243,6 +259,8 @@ docker compose up -d --build
 
 ### 6.5 보안
 
+- 비밀번호는 scrypt 해시로만 보관한다. `.env`나 `docker inspect`로 봐도 원문을 알 수 없다.
+- 역할을 둘로 나눴다. 관리자(`admin`)는 전체 기능, 조회 전용(`monuser`)은 상태·이력·이벤트만 본다. 조회 전용은 서버 미들웨어가 제어 API를 기본 차단(403)하고, 화면에서도 일괄 제어·데모 제어 탭과 재확인·재실행 버튼을 없앴다.
 - 대시보드는 로그인 페이지(ID/PW) → 세션 쿠키(HttpOnly, SameSite=Strict)로 보호한다. 인증 미들웨어가 정적 파일까지 막고, 무인증 요청은 로그인 페이지로 보낸다(API는 401). 같은 IP에서 5회 연속 실패하면 60초 차단한다. 인증이 필요한 응답은 `Cache-Control: no-store`로 브라우저에 남기지 않는다.
 - 대시보드와 API는 임의 명령 문자열을 받지 않는다. 명령은 카탈로그의 액션과 enum 파라미터로만 표현되며 console과 agent가 이중으로 검증한다.
 - console ↔ agent는 노드별 토큰으로 인증하고, agent 포트는 외부에 노출하지 않는다 (`nodenet` internal 네트워크).
@@ -307,7 +325,7 @@ docker compose up -d --build
 |---|---|---|
 | 통신 방향 | console → agent (Pull) | agent 발신형 연결, 중계 서버 |
 | 전송 보안 | HTTP + 노드별 토큰 | TLS/mTLS, 토큰 로테이션 |
-| 권한 | 단일 관리자 계정 | 조회/실행 권한 분리, HIGH 위험도 2인 승인 |
+| 권한 | 계정 2개 고정 (관리자 / 조회 전용), env로 설정 | 사용자 DB·역할 관리 화면, 액션별 권한, HIGH 위험도 2인 승인 |
 | 세션 | console 메모리 (재기동 시 재로그인), HTTP 평문 | 세션 외부 저장, HTTPS + `COOKIE_SECURE=true` |
 | 로그인 차단 | 클라이언트 IP 기준 | 앞단 프록시가 있으면 원 IP 전달 필요 (그렇지 않으면 전체가 한 IP로 묶여 차단이 전역화) |
 | 대규모 실행 | 전역 동시성 상한 | canary 1대 → 나머지 순차 롤아웃, 점검 시간대 예약 |
