@@ -365,6 +365,8 @@ function drawChart(svg, panel, now, windowMs) {
   const m = { l: 40, r: 10, t: 8, b: 22 };
   const iw = W - m.l - m.r;
   const ih = H - m.t - m.b;
+  // 레이아웃이 순간적으로 극단적으로 좁아지면(창 최소화, 인쇄·캡처 중 resize) 그리지 않고 이전 그림을 유지한다.
+  if (iw < 40) return;
   const t0 = now - windowMs;
 
   const series = state.nodes.map((n) => ({
