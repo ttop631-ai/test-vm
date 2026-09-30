@@ -83,7 +83,7 @@ compose 파일에 `${VAR:-default}`로 기본값을 두어 `.env` 없이도 `doc
 | PROFILE | CPU % | MEM % | DISK % | 초기 데몬 |
 |---|---|---|---|---|
 | `normal` | 20~50 | 40~60 | 50~65 | 전부 RUNNING |
-| `disk_pressure` | 20~50 | 40~60 | 82~88, tick당 +0.05%p 누적 증가 | 전부 RUNNING |
+| `disk_pressure` | 20~50 | 40~60 | 82~88, tick당 +0.05%p 누적 증가. 기준 범위 상단과 값 모두 **89 상한** (CRITICAL 90 미만 유지) | 전부 RUNNING |
 | `daemon_down` | 20~50 | 40~60 | 50~65 | `emr-sync` STOPPED |
 
 ### 3.3 API

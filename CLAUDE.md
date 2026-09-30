@@ -18,7 +18,7 @@
 | 저장소 | SQLite (WAL) | `/data` 볼륨 |
 | 배포 | docker compose | 호스트 노출 포트는 console 하나 |
 
-`requirements.txt`는 버전을 `==`로 고정한다.
+`requirements.txt`, `requirements-dev.txt`는 버전을 `==`로 고정한다. 테스트 전용 의존성(pytest)은 `requirements-dev.txt`에만 두고 이미지에는 설치하지 않는다.
 
 ## 3. 디렉터리 구조
 
@@ -34,6 +34,7 @@
 ├── console/
 │   ├── Dockerfile
 │   ├── requirements.txt
+│   ├── requirements-dev.txt
 │   ├── nodes.json
 │   ├── tests/
 │   │   └── test_status.py
@@ -100,7 +101,7 @@
 | 단계 | 범위 | 완료 기준 |
 |---|---|---|
 | S1 | agent: simulator, `/livez`, `/health`, `/commands`, `/commands/{id}`, `/chaos` | 3개 노드 응답. 같은 `command_id` 2회 POST 시 실행 1회. 토큰 불일치 401 |
-| S2 | console: registry, agent_client, poller, status (+ 단위 테스트) | node-c `blackhole` 주입 시 node-a/b의 `last_success_at` 간격 5±1초 유지. node-c는 3회 실패 후 UNREACHABLE |
+| S2 | console: registry, agent_client, poller, status (+ 단위 테스트), 검증용 최소 기동(main의 lifespan·`/healthz`·`GET /api/nodes[/{id}]`, compose console 서비스) | node-c `blackhole` 주입 시 node-a/b의 `last_success_at` 간격 5±1초 유지. node-c는 3회 실패 후 UNREACHABLE |
 | S3 | console: actions, jobs, db, reconcile, retry, 기동 시 복구 | `POST /api/jobs` 즉시 202. blackhole 노드는 UNKNOWN, 나머지 SUCCESS. chaos 해제 후 reconcile로 SUCCESS 확인 |
 | S4 | 대시보드 4개 탭 | 새로고침 없이 상태 갱신. HIGH 액션 확인 모달. console 중지 시 연결 끊김 배너 |
 | S5 | compose, auth, `.env.example`, AWS 배포 | `docker compose up -d --build` 한 번으로 기동. 외부에서는 console 포트만 열림. 인증 없이 `/`와 `/api/*` 401 |
