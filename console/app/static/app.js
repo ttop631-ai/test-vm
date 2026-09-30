@@ -317,7 +317,7 @@ const PANELS = [
   { key: "cpu", title: "CPU 사용률", unit: "%", max: 100, thr: THRESHOLDS.cpu },
   { key: "mem", title: "메모리 사용률", unit: "%", max: 100, thr: THRESHOLDS.mem },
   { key: "disk", title: "디스크 사용률", unit: "%", max: 100, thr: THRESHOLDS.disk },
-  { key: "latency", title: "응답 시간", unit: "ms", max: null, thr: { warn: SLOW_MS } },
+  { key: "latency", title: "응답 시간", unit: "ms", max: null, thr: { warn: SLOW_MS }, note: `경고 ≥ ${SLOW_MS}ms` },
 ];
 
 function nodeColor(nodeId) {
@@ -334,7 +334,7 @@ function renderPanels() {
   const container = $("#panels");
   if (container.children.length !== PANELS.length) {
     container.replaceChildren(...PANELS.map((p) => h("div", { class: "panel", dataset: { key: p.key } },
-      h("h3", { text: `${p.title} (${p.unit})` }), s("svg", { role: "img", "aria-label": p.title }))));
+      h("h3", null, `${p.title} (${p.unit})`, p.note ? h("span", { class: "muted", text: ` · ${p.note}` }) : null), s("svg", { role: "img", "aria-label": p.title }))));
   }
   for (const p of PANELS) {
     const el = container.querySelector(`[data-key="${p.key}"] svg`);
@@ -362,16 +362,18 @@ function drawChart(svg, panel, now) {
 
   let yMax = panel.max;
   if (yMax === null) {
+    // 응답 시간은 평소 수 ms라 임계선(1500ms)에 스케일을 맞추면 선이 바닥에 붙는다. 데이터 기준으로 자동 스케일.
     const maxV = Math.max(0, ...series.flatMap((sr) => sr.points.map((pt) => pt.v)));
-    yMax = niceCeil(Math.max(panel.thr.warn * 1.15, maxV * 1.1));
+    yMax = niceCeil(Math.max(20, maxV * 1.2));
   }
   const x = (t) => m.l + ((t - t0) / SERIES_WINDOW_MS) * iw;
   const y = (v) => m.t + ih - (Math.min(v, yMax) / yMax) * ih;
 
   const g = [];
-  // y 격자
-  for (let i = 0; i <= 4; i++) {
-    const v = (yMax / 4) * i;
+  // y 격자: 눈금이 정수가 되도록 4 또는 5 등분 (예: 100 → 25 간격, 50 → 10 간격)
+  const div = Number.isInteger(yMax / 4) ? 4 : 5;
+  for (let i = 0; i <= div; i++) {
+    const v = (yMax / div) * i;
     g.push(s("line", { class: "gridline", x1: m.l, x2: W - m.r, y1: y(v), y2: y(v) }));
     g.push(s("text", { x: m.l - 6, y: y(v) + 3, "text-anchor": "end" }, Math.round(v)));
   }
@@ -382,11 +384,11 @@ function drawChart(svg, panel, now) {
     g.push(s("line", { class: "gridline", x1: x(t), x2: x(t), y1: m.t, y2: m.t + ih }));
     g.push(s("text", { x: x(t), y: H - 6, "text-anchor": "middle" }, `${pad(d.getHours())}:${pad(d.getMinutes())}`));
   }
-  // 임계선
-  if (panel.thr.warn !== undefined) {
+  // 임계선 (현재 스케일 범위 안에 있을 때만)
+  if (panel.thr.warn !== undefined && panel.thr.warn <= yMax) {
     g.push(s("line", { class: "thr warn", x1: m.l, x2: W - m.r, y1: y(panel.thr.warn), y2: y(panel.thr.warn) }));
   }
-  if (panel.thr.crit !== undefined) {
+  if (panel.thr.crit !== undefined && panel.thr.crit <= yMax) {
     g.push(s("line", { class: "thr crit", x1: m.l, x2: W - m.r, y1: y(panel.thr.crit), y2: y(panel.thr.crit) }));
   }
 
