@@ -1,0 +1,5 @@
+[
+  {"id": "node-a", "name": "병원 A", "url": "http://node-a:9000", "token_env": "AGENT_TOKEN_A"},
+  {"id": "node-b", "name": "병원 B", "url": "http://node-b:9000", "token_env": "AGENT_TOKEN_B"},
+  {"id": "node-c", "name": "병원 C", "url": "http://node-c:9000", "token_env": "AGENT_TOKEN_C"}
+]

@@ -1,5 +1,5 @@
-# NodeWatch — S1: mock agent 3개 (SPEC §2, §12)
-# 노드 포트는 호스트에 노출하지 않는다. 검증용 포트 바인딩은 compose.dev.yml 참고.
+# NodeWatch (SPEC §2, §12)
+# 호스트에 노출하는 포트는 console 하나. 노드 포트는 노출하지 않는다. 검증용 포트 바인딩은 compose.dev.yml 참고.
 
 x-agent: &agent
   build: ./agent
@@ -20,6 +20,31 @@ x-agent: &agent
       max-file: "3"
 
 services:
+  console:
+    build: ./console
+    restart: unless-stopped
+    mem_limit: 256m
+    ports:
+      - "${CONSOLE_PORT:-8080}:8000"
+    networks:
+      - public
+      - nodenet
+    environment:
+      AGENT_TOKEN_A: ${AGENT_TOKEN_A:-dev-token-a}
+      AGENT_TOKEN_B: ${AGENT_TOKEN_B:-dev-token-b}
+      AGENT_TOKEN_C: ${AGENT_TOKEN_C:-dev-token-c}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os, urllib.request; urllib.request.urlopen('http://localhost:%s/healthz' % os.environ.get('LISTEN_PORT', '8000'), timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   node-a:
     <<: *agent
     environment:
@@ -45,5 +70,6 @@ services:
       AGENT_TOKEN: ${AGENT_TOKEN_C:-dev-token-c}
 
 networks:
+  public: {}
   nodenet:
     internal: true
