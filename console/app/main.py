@@ -1,7 +1,4 @@
-"""FastAPI 앱. lifespan에서 poller 시작/정지.
-
-인증 미들웨어는 S5에서 추가한다.
-"""
+"""FastAPI 앱. lifespan에서 poller 시작/정지, 기동 시 job 복구. HTTP Basic 인증은 미들웨어."""
 from __future__ import annotations
 
 import asyncio
@@ -18,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .actions import CATALOG
 from .agent_client import AgentClient
+from .auth import BasicAuthMiddleware
 from .config import Settings
 from .db import Database
 from .jobs import JobError, JobService, utc_now_iso
@@ -62,9 +60,13 @@ def _on_background_done(task: asyncio.Task) -> None:
         log.error("event=background_task_error task=%s error=%r", task.get_name(), task.exception())
 
 
+settings = Settings()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    settings = Settings()
+    if settings.admin_password == "nodewatch":
+        log.warning("event=default_admin_password msg='ADMIN_PASSWORD is the default; change it before exposing the console'")
     nodes = load_nodes(settings.nodes_file)
     client = AgentClient(settings)
     poller = Poller(nodes, client, settings)
@@ -96,6 +98,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="NodeWatch console", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+# StaticFiles mount까지 보호하려면 라우터 dependency가 아니라 미들웨어여야 한다 (SPEC §8).
+app.add_middleware(BasicAuthMiddleware, username=settings.admin_user, password=settings.admin_password)
 
 
 @app.get("/healthz")
@@ -142,8 +146,8 @@ async def _relay_chaos(node_id: str, body: dict | None):
 # ---------------------------------------------------------------- actions / jobs (S3)
 
 def _requested_by(request: Request) -> str:
-    # TODO(question): 인증 미들웨어는 S5 범위. 그 전까지는 request.state.user가 없어 "anonymous"로 기록된다.
-    return getattr(request.state, "user", None) or "anonymous"
+    # BasicAuthMiddleware가 인증된 사용자명을 넣는다. 인증 없이 여기에 도달하는 경로는 없다.
+    return request.state.user
 
 
 @app.exception_handler(RequestValidationError)

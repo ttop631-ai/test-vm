@@ -31,7 +31,13 @@ services:
       - nodenet
     volumes:
       - nodewatch-data:/data
+    # .env의 튜닝 값(POLL_INTERVAL_SEC, SAMPLES_MAX 등 SPEC §5)을 console에 전달한다. 없으면 기본값.
+    env_file:
+      - path: .env
+        required: false
     environment:
+      ADMIN_USER: ${ADMIN_USER:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-nodewatch}
       AGENT_TOKEN_A: ${AGENT_TOKEN_A:-dev-token-a}
       AGENT_TOKEN_B: ${AGENT_TOKEN_B:-dev-token-b}
       AGENT_TOKEN_C: ${AGENT_TOKEN_C:-dev-token-c}

@@ -10,6 +10,10 @@ _DEFAULT_NODES_FILE = Path(__file__).resolve().parent.parent / "nodes.json"
 
 
 class Settings(BaseSettings):
+    # 대시보드·API HTTP Basic 인증 (SPEC §2.2). 데모 배포 시 비밀번호 변경.
+    admin_user: str = "admin"
+    admin_password: str = Field(default="nodewatch", repr=False)
+
     # 노드 레지스트리 (SPEC §2.1)
     nodes_file: Path = _DEFAULT_NODES_FILE
     # 저장소 (SPEC §9)
