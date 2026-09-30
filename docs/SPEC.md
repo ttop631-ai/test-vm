@@ -56,8 +56,11 @@ compose 파일에 `${VAR:-default}`로 기본값을 두어 `.env` 없이도 `doc
 | 변수 | 기본값 | 용도 |
 |---|---|---|
 | `CONSOLE_PORT` | `8080` | 호스트 노출 포트 (AWS 데모는 `80`) |
-| `ADMIN_USER` | `admin` | 대시보드 Basic 인증 |
-| `ADMIN_PASSWORD` | `nodewatch` | 대시보드 Basic 인증 (데모 배포 시 변경) |
+| `ADMIN_USER` | `admin` | 대시보드 로그인 계정 (API는 Basic 헤더로도 사용) |
+| `ADMIN_PASSWORD` | `nodewatch` | 대시보드 로그인 비밀번호 (데모 배포 시 변경) |
+| `SESSION_TTL_SEC` | `28800` | 로그인 세션 유효 시간 (8시간, 절대 만료) |
+| `COOKIE_SECURE` | `false` | 세션 쿠키 `Secure` 속성. HTTPS 뒤에 둘 때 `true` |
+| `LOGIN_MAX_FAILURES` / `LOGIN_LOCKOUT_SEC` | `5` / `60` | 같은 클라이언트 IP의 연속 로그인 실패 n회 → n초 차단 (Basic 헤더 실패 포함) |
 | `AGENT_TOKEN_A/B/C` | `dev-token-a/b/c` | console ↔ agent 인증 |
 
 ---
@@ -267,13 +270,22 @@ compose 파일에 `${VAR:-default}`로 기본값을 두어 `.env` 없이도 `doc
 
 ## 8. Console API
 
-- `/api/*`는 HTTP Basic 인증. **미들웨어로 적용**한다 — `StaticFiles` mount에는 라우터 dependency가 적용되지 않아 대시보드가 무인증으로 열리기 때문이다. `/healthz`만 예외.
+- 인증은 **미들웨어로 적용**한다 — `StaticFiles` mount에는 라우터 dependency가 적용되지 않아 대시보드가 무인증으로 열리기 때문이다.
+  - 브라우저: 로그인 페이지(`/login`)에서 ID/PW 입력 → 세션 쿠키 `nw_session` (HttpOnly, SameSite=Strict, `COOKIE_SECURE`). 세션은 console 메모리에 두며 재기동 시 다시 로그인한다 (단일 워커).
+  - 스크립트: `Authorization: Basic` 헤더도 허용한다. 인증 창 팝업을 띄우지 않도록 `WWW-Authenticate`는 보내지 않는다.
+  - 무인증 공개 경로: `/healthz`, `/login`, `/api/login`, `/style.css`, `/img.png`.
+  - 무인증 요청: `/api/*` → 401 JSON, 그 외 GET/HEAD → 302 `/login`, 그 외 메서드 → 401.
+  - 비교는 `hmac.compare_digest`. 로그인·Basic 실패는 클라이언트 IP별로 세어 `LOGIN_MAX_FAILURES`회 연속이면 `LOGIN_LOCKOUT_SEC`초 동안 429.
 - 오류 응답은 FastAPI 기본 형식 `{"detail": "..."}`.
 - 요청자(`requested_by`)는 인증된 사용자명으로 기록한다.
 
 | Method | Path | 설명 | 응답 |
 |---|---|---|---|
 | GET | `/healthz` | 컨테이너 헬스체크 (무인증) | 200 `{"status":"ok"}` |
+| GET | `/login` | 로그인 페이지 (무인증). 이미 로그인돼 있으면 302 `/` | 200 / 302 |
+| POST | `/api/login` | `{"username","password"}` → 세션 쿠키 발급 (무인증) | 200 `{"username"}` / 401 / 429 |
+| POST | `/api/logout` | 세션 삭제, 쿠키 만료 | 200 |
+| GET | `/api/me` | 현재 사용자 | 200 `{"username"}` |
 | GET | `/api/nodes` | 전체 노드 현재 상태 | 200 `NodeView[]` |
 | GET | `/api/nodes/{node_id}` | 단일 노드 + 최근 샘플 `SAMPLES_MAX`건 | 200 / 404 |
 | GET | `/api/actions` | 액션 카탈로그 | 200 |
@@ -432,7 +444,8 @@ CREATE INDEX IF NOT EXISTS idx_node_events_node ON node_events(node_id, id DESC)
 
 ## 10. 대시보드
 
-- 정적 파일 3개: `index.html`, `app.js`, `style.css`. 외부 CDN, 웹폰트, 빌드 단계 없음 (폐쇄망에서도 그대로 동작).
+- 정적 파일: `index.html`, `app.js`, `style.css`, `login.html`, `img.png`(로그인 화면 로고). 외부 CDN, 웹폰트, 빌드 단계 없음 (폐쇄망에서도 그대로 동작).
+- 로그인 페이지: 로고를 화면 중앙에 두고 그 아래 ID/PW 입력. 성공 시 `/`로 이동. 대시보드 상단에 사용자명과 [로그아웃]. API가 401을 돌려주면(세션 만료, console 재기동) 로그인 페이지로 이동한다.
 - 모든 API 호출은 상대경로 (`/api/...`).
 - 시각은 API의 UTC 값을 브라우저 로컬 시간으로 변환해 표시.
 
@@ -455,7 +468,8 @@ CREATE INDEX IF NOT EXISTS idx_node_events_node ON node_events(node_id, id DESC)
 | 원격 임의 명령 실행 | 액션 화이트리스트 + enum 파라미터. 셸 문자열 실행 경로 자체가 없음 |
 | 무단 agent 호출 | 노드별 토큰 `X-Agent-Token`, `hmac.compare_digest`. 토큰은 env로만 주입, 로그에 기록 금지 |
 | 노드 직접 노출 | 노드 포트 호스트 미노출, `nodenet` internal 네트워크 |
-| 대시보드 무단 접근 | HTTP Basic (데모 수준). 요청자 감사 기록 |
+| 대시보드 무단 접근 | 로그인 페이지 + 세션 쿠키(HttpOnly, SameSite=Strict), API는 Basic 헤더 허용. IP별 연속 실패 차단. 요청자 감사 기록 |
+| CSRF | 세션 쿠키 SameSite=Strict (다른 사이트에서 온 요청에 쿠키 미전송) |
 | 과대 출력으로 인한 DB·화면 장애 | `OUTPUT_MAX_BYTES` 절단 + `output_truncated` 플래그 |
 
 범위 밖 (README 한계 절에 기술): TLS/mTLS, 토큰 로테이션, RBAC, 2인 승인.
