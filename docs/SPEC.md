@@ -347,7 +347,7 @@ compose 파일에 `${VAR:-default}`로 기본값을 두어 `.env` 없이도 `doc
 | `COMPLETED` | 전 대상 SUCCESS |
 | `PARTIAL` | SUCCESS 1개 이상 + 비성공 1개 이상 |
 | `FAILED` | SUCCESS 0개 |
-| `INTERRUPTED` | console 재기동으로 중단됨 (§9 복구) |
+| `INTERRUPTED` | console 재기동으로 중단됨 (§9 복구). reconcile 후에도 재계산하지 않고 유지한다 (중단 이력 보존, 대상별 결과는 갱신됨) |
 
 ---
 
@@ -405,7 +405,7 @@ CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at DESC);
 
 | 탭 | 내용 | 갱신 |
 |---|---|---|
-| 1. 상태 현황 | 노드 카드: 상태 색·라벨, reasons, CPU/MEM/DISK 바, 데몬 목록, 응답시간, "마지막 수집 n초 전", 수집 실패 배지. 상단 요약(정상/경고/장애 개수) | 3초 폴링 |
+| 1. 상태 현황 | 노드 카드: 상태 색·라벨, reasons, CPU/MEM/DISK 바, 데몬 목록, 응답시간, "마지막 수집 n초 전", 수집 실패 배지. 상단 요약(정상/경고/장애 개수). 시계열 패널 4개(CPU/MEM/DISK/응답시간): 노드별 선, 임계선, 최근 샘플(`GET /api/nodes/{id}`의 `samples`), 수집 실패 구간은 끊어서 표시, hover 시 시각별 값 | 3초 폴링 |
 | 2. 일괄 제어 | 노드 체크박스(상태 배지 포함, 전체 선택), 액션 선택 → 카탈로그 기반 params 폼, 실행. HIGH 위험도 → 대상 확인 모달. UNREACHABLE 노드 선택 시 경고 문구 (실행은 허용). 실행 후 해당 job 상세로 이동 | — |
 | 3. 실행 이력 | job 목록(시각, 액션, 대상 수, 결과 카운트, 요청자, 상태). 상세: 노드별 상태, error_type, 소요시간, 출력(`<pre>`, 접기). [결과 재확인] [실패 대상 재실행] 버튼 | RUNNING job은 2초 폴링 |
 | 4. 데모 제어 | 노드별 chaos 설정 (지연, 오류율, blackhole, 데몬 중지, 초기화). "데모 전용" 표기 | — |
