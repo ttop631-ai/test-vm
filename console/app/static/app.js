@@ -6,7 +6,8 @@
 const NODE_POLL_MS = 3000;
 const JOB_POLL_MS = 2000;
 const HISTORY_POLL_MS = 5000;
-const SERIES_WINDOW_MS = 5 * 60 * 1000; // 샘플 60건 × 5초
+const MIN_WINDOW_MS = 5 * 60 * 1000;   // 시계열 최소 표시 창. 보유 샘플이 더 길면 창을 늘린다 (SAMPLES_MAX)
+const TICK_STEPS_MIN = [1, 2, 5, 10, 15, 30, 60, 120, 180, 360, 720]; // x축 눈금 후보 (분)
 const SERIES_GAP_MS = 12500;            // 샘플 간격이 이보다 크면 수집 실패 구간으로 보고 선을 끊는다
 
 // 표시용 임계선. SPEC §4.3 / §5 기본값과 같다.
@@ -325,9 +326,24 @@ function nodeColor(nodeId) {
   return SERIES_COLORS[(i < 0 ? 0 : i) % SERIES_COLORS.length];
 }
 
+function seriesWindowMs(now) {
+  // console이 보유한 가장 오래된 샘플까지 보여 준다 (분 단위 올림, 최소 5분).
+  let oldest = now;
+  for (const list of Object.values(state.samples)) {
+    if (list.length) oldest = Math.min(oldest, new Date(list[0].ts).getTime());
+  }
+  return Math.max(MIN_WINDOW_MS, Math.ceil((now - oldest) / 60000) * 60000);
+}
+
+function fmtWindow(ms) {
+  const min = Math.round(ms / 60000);
+  return min < 60 ? `${min}분` : `${Math.floor(min / 60)}시간${min % 60 ? ` ${min % 60}분` : ""}`;
+}
+
 function renderPanels() {
   const now = Date.now();
-  $("#series-range").textContent = `최근 ${SERIES_WINDOW_MS / 60000}분 · 수집 실패 구간은 선이 끊깁니다`;
+  const windowMs = seriesWindowMs(now);
+  $("#series-range").textContent = `최근 ${fmtWindow(windowMs)} · 수집 실패 구간은 선이 끊깁니다`;
   $("#legend").replaceChildren(...state.nodes.map((n) =>
     h("span", null, h("i", { style: `background:${nodeColor(n.node_id)}` }), n.node_name)));
 
@@ -338,18 +354,18 @@ function renderPanels() {
   }
   for (const p of PANELS) {
     const el = container.querySelector(`[data-key="${p.key}"] svg`);
-    drawChart(el, p, now);
+    drawChart(el, p, now, windowMs);
   }
   if (state.hover) showHover(state.hover.key, state.hover.clientX, state.hover.clientY);
 }
 
-function drawChart(svg, panel, now) {
+function drawChart(svg, panel, now, windowMs) {
   const W = svg.clientWidth || 420;
   const H = 190;
   const m = { l: 40, r: 10, t: 8, b: 22 };
   const iw = W - m.l - m.r;
   const ih = H - m.t - m.b;
-  const t0 = now - SERIES_WINDOW_MS;
+  const t0 = now - windowMs;
 
   const series = state.nodes.map((n) => ({
     id: n.node_id,
@@ -366,7 +382,7 @@ function drawChart(svg, panel, now) {
     const maxV = Math.max(0, ...series.flatMap((sr) => sr.points.map((pt) => pt.v)));
     yMax = niceCeil(Math.max(20, maxV * 1.2));
   }
-  const x = (t) => m.l + ((t - t0) / SERIES_WINDOW_MS) * iw;
+  const x = (t) => m.l + ((t - t0) / windowMs) * iw;
   const y = (v) => m.t + ih - (Math.min(v, yMax) / yMax) * ih;
 
   const g = [];
@@ -377,9 +393,11 @@ function drawChart(svg, panel, now) {
     g.push(s("line", { class: "gridline", x1: m.l, x2: W - m.r, y1: y(v), y2: y(v) }));
     g.push(s("text", { x: m.l - 6, y: y(v) + 3, "text-anchor": "end" }, Math.round(v)));
   }
-  // x 격자: 1분 단위
-  const firstMin = Math.ceil(t0 / 60000) * 60000;
-  for (let t = firstMin; t <= now; t += 60000) {
+  // x 격자: 눈금이 8개 이하가 되는 가장 작은 간격 (로컬 시각 기준 정각에 맞춤)
+  const stepMs = (TICK_STEPS_MIN.find((mn) => windowMs / (mn * 60000) <= 8) || 720) * 60000;
+  const tzOffsetMs = new Date(now).getTimezoneOffset() * 60000;
+  const firstTick = Math.ceil((t0 - tzOffsetMs) / stepMs) * stepMs + tzOffsetMs;
+  for (let t = firstTick; t <= now; t += stepMs) {
     const d = new Date(t);
     g.push(s("line", { class: "gridline", x1: x(t), x2: x(t), y1: m.t, y2: m.t + ih }));
     g.push(s("text", { x: x(t), y: H - 6, "text-anchor": "middle" }, `${pad(d.getHours())}:${pad(d.getMinutes())}`));
@@ -430,7 +448,7 @@ function drawChart(svg, panel, now) {
     s("line", { class: "cursor", x1: 0, x2: 0, y1: m.t, y2: m.t + ih, visibility: "hidden" }),
     overlay,
   );
-  svg._chart = { series, x, t0, W, m, iw, panel };
+  svg._chart = { series, x, t0, W, m, iw, panel, windowMs };
 }
 
 function niceCeil(v) {
@@ -442,11 +460,11 @@ function niceCeil(v) {
 function showHover(key, clientX, clientY) {
   const svg = document.querySelector(`#panels [data-key="${key}"] svg`);
   if (!svg || !svg._chart) return;
-  const { series, t0, W, m, iw, panel } = svg._chart;
+  const { series, t0, W, m, iw, panel, windowMs } = svg._chart;
   const rect = svg.getBoundingClientRect();
   const px = ((clientX - rect.left) / rect.width) * W; // viewBox 좌표
   if (px < m.l || px > m.l + iw) return hideHover();
-  const t = t0 + ((px - m.l) / iw) * SERIES_WINDOW_MS;
+  const t = t0 + ((px - m.l) / iw) * windowMs;
 
   const rows = [];
   for (const sr of series) {

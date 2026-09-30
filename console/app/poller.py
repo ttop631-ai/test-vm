@@ -21,9 +21,6 @@ from .status import evaluate
 
 log = logging.getLogger("console.poller")
 
-SAMPLES_MAX = 60
-
-
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -39,7 +36,7 @@ class NodeState:
     latency_ms: int | None = None
     last_health: HealthPayload | None = None
     skipped_cycles: int = 0
-    samples: deque[Sample] = field(default_factory=lambda: deque(maxlen=SAMPLES_MAX))
+    samples: deque[Sample] = field(default_factory=deque)  # maxlen은 Poller가 SAMPLES_MAX로 지정
     in_flight: bool = False
 
     def apply(self, result: HealthResult, attempted_at: datetime) -> None:
@@ -66,7 +63,8 @@ class Poller:
         self.client = client
         self.settings = settings
         self.states: dict[str, NodeState] = {
-            n.id: NodeState(node_id=n.id, node_name=n.name) for n in nodes.values()
+            n.id: NodeState(node_id=n.id, node_name=n.name, samples=deque(maxlen=settings.samples_max))
+            for n in nodes.values()
         }
         self._sem = asyncio.Semaphore(settings.poll_concurrency)
         # create_task 참조 보관 (CLAUDE.md §4-5)

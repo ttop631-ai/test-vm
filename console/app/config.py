@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings
 
 _DEFAULT_NODES_FILE = Path(__file__).resolve().parent.parent / "nodes.json"
@@ -26,6 +27,7 @@ class Settings(BaseSettings):
     cmd_read_timeout: float = 15.0
     job_concurrency: int = 10
     output_max_bytes: int = 65536
+    samples_max: int = Field(default=60, ge=1, le=17280)  # 노드별 메모리 샘플 수 (60 × 5s = 5분)
 
     # 메트릭 임계치 (SPEC §4.3)
     cpu_warn_pct: float = 80
