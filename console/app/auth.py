@@ -167,7 +167,7 @@ class AuthMiddleware:
 
         if user is not None:
             scope.setdefault("state", {})["user"] = user
-            await self.app(scope, receive, send)
+            await self.app(scope, receive, _no_store(send))
             return
 
         path = scope["path"]
@@ -178,6 +178,20 @@ class AuthMiddleware:
         else:
             response = RedirectResponse(LOGIN_PATH, status_code=302)
         await response(scope, receive, send)
+
+
+def _no_store(send: Send) -> Send:
+    """인증이 필요한 응답은 브라우저가 캐시하지 않게 한다.
+
+    캐시되면 로그아웃 후에도 index.html·app.js가 서버 확인 없이 뜬다 (API 401로 곧 로그인 페이지로 가지만).
+    """
+    async def wrapped(message) -> None:
+        if message["type"] == "http.response.start":
+            headers = [(k, v) for k, v in message.get("headers", []) if k.lower() != b"cache-control"]
+            headers.append((b"cache-control", b"no-store"))
+            message = {**message, "headers": headers}
+        await send(message)
+    return wrapped
 
 
 def _json(status: int, detail: str, headers: dict | None = None) -> JSONResponse:

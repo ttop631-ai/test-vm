@@ -48,7 +48,8 @@
           cache: "no-store",
         });
         if (resp.ok) {
-          location.replace("/");
+          // 로그인 전에 열려던 탭(#events 등)이 있으면 그대로 이어서 연다
+          location.replace("/" + location.hash);
           return;
         }
         let detail = `로그인 실패 (HTTP ${resp.status})`;
