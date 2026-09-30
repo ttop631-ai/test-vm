@@ -171,7 +171,7 @@ compose 파일에 `${VAR:-default}`로 기본값을 두어 `.env` 없이도 `doc
 | 순위 | 상태 | UI 표시 | 조건 |
 |---|---|---|---|
 | 1 | `UNKNOWN` | 확인 중 (회색) | 성공 이력 없음 AND `consecutive_failures < FAIL_THRESHOLD` |
-| 2 | `UNREACHABLE` | 장애 · 통신두절 (적색) | `consecutive_failures ≥ FAIL_THRESHOLD` OR `now − last_success_at > STALE_FACTOR × POLL_INTERVAL_SEC` |
+| 2 | `UNREACHABLE` | 장애 · 통신두절 (적색) | `consecutive_failures ≥ FAIL_THRESHOLD` OR `now − last_attempt_at > STALE_FACTOR × POLL_INTERVAL_SEC` |
 | 3 | `CRITICAL` | 장애 (적색) | STOPPED 데몬 존재 OR 메트릭 중 하나라도 CRITICAL 임계 이상 |
 | 4 | `WARNING` | 경고 (황색) | 메트릭 WARNING 임계 이상 OR `0 < consecutive_failures < FAIL_THRESHOLD` OR `latency_ms ≥ SLOW_MS` OR RESTARTING 데몬 존재 |
 | 5 | `HEALTHY` | 정상 (녹색) | 그 외 |
@@ -200,7 +200,7 @@ compose 파일에 `${VAR:-default}`로 기본값을 두어 `.env` 없이도 `doc
 | `SLOW_MS` | 1500 | 이 이상이면 지연 경고 |
 | `POLL_CONCURRENCY` | 20 | 노드 수가 늘어도 console 소켓·CPU 보호 |
 | `FAIL_THRESHOLD` | 3 | 1회 실패로 장애 판정하지 않음 (오탐 억제) |
-| `STALE_FACTOR` | 3 | poller 자체 이상(루프 정지 등) 감지 |
+| `STALE_FACTOR` | 3 | poller 자체 이상(루프 정지 등) 감지. 기준은 `last_attempt_at` — `last_success_at` 기준이면 실패 기록이 read timeout만큼 늦어 노드 장애 시 `FAIL_THRESHOLD`보다 먼저 걸린다 |
 | `CMD_CONNECT_TIMEOUT` | 2.0s | |
 | `CMD_READ_TIMEOUT` | 15s | 최장 액션(재시작 ~5s)의 3배 여유 |
 | `JOB_CONCURRENCY` | 10 | 동시에 명령을 받는 노드 수 상한 |
