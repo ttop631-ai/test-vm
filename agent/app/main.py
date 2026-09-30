@@ -61,10 +61,12 @@ def _configure_logging() -> None:
     root.handlers = [handler]
     root.setLevel(logging.INFO)
     # uvicorn 기본 핸들러를 걷어내고 같은 key=value 형식으로 통일한다.
-    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+    for name in ("uvicorn", "uvicorn.error"):
         lg = logging.getLogger(name)
         lg.handlers = []
         lg.propagate = True
+    # access log는 auth_and_log 미들웨어가 key=value로 남긴다.
+    logging.getLogger("uvicorn.access").disabled = True
 
 
 _configure_logging()

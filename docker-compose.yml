@@ -3,7 +3,6 @@
 
 x-agent: &agent
   build: ./agent
-  image: nodewatch-agent:local
   restart: unless-stopped
   mem_limit: 96m
   networks:
