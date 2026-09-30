@@ -138,6 +138,11 @@ class ApiError extends Error {
   }
 }
 
+// API 오류(연결 끊김 등)는 배너·화면이 처리한다. 그 외 예외(렌더 코드 오류)는 조용히 삼키지 않고 콘솔에 남긴다.
+function reportError(where, e) {
+  if (!(e instanceof ApiError)) console.error(`[nodewatch] ${where}`, e);
+}
+
 async function api(path, { method = "GET", body } = {}) {
   let resp;
   try {
@@ -208,7 +213,7 @@ function onRoute() {
   document.querySelectorAll(".tabs a").forEach((a) => a.classList.toggle("active", a.dataset.tab === tab));
   if (tab === "status") {
     renderStatus();
-    refreshSamples();
+    refreshSamples().catch((e) => reportError("refreshSamples", e));
   } else if (tab === "control") {
     renderControl();
   } else if (tab === "history") {
@@ -224,11 +229,15 @@ function onRoute() {
 // ------------------------------------------------------------------ 노드 폴링
 
 let nodeTimer = null;
+let nodesBusy = false;
 
 async function pollNodes() {
   clearTimeout(nodeTimer);
   // 보이지 않는 탭은 폴링하지 않는다. 다시 보이면 visibilitychange에서 즉시 재개한다.
   if (document.hidden) return;
+  // 진행 중인 폴링이 있으면 겹쳐 요청하지 않는다 (끝나면 그쪽이 다음 주기를 건다)
+  if (nodesBusy) return;
+  nodesBusy = true;
   try {
     state.nodes = await api("/api/nodes");
     const { tab } = currentRoute();
@@ -242,19 +251,32 @@ async function pollNodes() {
     }
   } catch (e) {
     // 연결 끊김 배너는 api()가 처리한다. 기존 화면 값은 유지.
+    reportError("pollNodes", e);
   } finally {
+    nodesBusy = false;
     clearTimeout(nodeTimer);
     if (!document.hidden) nodeTimer = setTimeout(pollNodes, NODE_POLL_MS);
   }
 }
 
-async function refreshSamples() {
-  if (!state.nodes.length) return;
-  const results = await Promise.allSettled(state.nodes.map((n) => api(`/api/nodes/${encodeURIComponent(n.node_id)}`)));
-  results.forEach((r, i) => {
-    if (r.status === "fulfilled") state.samples[state.nodes[i].node_id] = r.value.samples || [];
+let samplesInFlight = null;
+
+function refreshSamples() {
+  // 진행 중이면 같은 요청을 기다린다 (탭 이동·폴링·탭 복귀가 겹쳐도 노드별 요청은 하나)
+  if (samplesInFlight) return samplesInFlight;
+  samplesInFlight = (async () => {
+    // 요청 시점의 node_id를 고정한다. 응답을 기다리는 동안 state.nodes가 바뀌어도 샘플이 다른 노드에 붙지 않는다.
+    const ids = state.nodes.map((n) => n.node_id);
+    if (!ids.length) return;
+    const results = await Promise.allSettled(ids.map((id) => api(`/api/nodes/${encodeURIComponent(id)}`)));
+    results.forEach((r, i) => {
+      if (r.status === "fulfilled") state.samples[ids[i]] = r.value.samples || [];
+    });
+    if (currentRoute().tab === "status") renderPanels();
+  })().finally(() => {
+    samplesInFlight = null;
   });
-  if (currentRoute().tab === "status") renderPanels();
+  return samplesInFlight;
 }
 
 // 1초마다 "n초 전" 갱신
@@ -410,7 +432,9 @@ function drawChart(svg, panel, now, windowMs) {
   let yMax = panel.max;
   if (yMax === null) {
     // 응답 시간은 평소 수 ms라 임계선(1500ms)에 스케일을 맞추면 선이 바닥에 붙는다. 데이터 기준으로 자동 스케일.
-    const maxV = Math.max(0, ...series.flatMap((sr) => sr.points.map((pt) => pt.v)));
+    // 스프레드(Math.max(...arr))는 값이 수십만 개면 RangeError가 난다 → 반복문
+    let maxV = 0;
+    for (const sr of series) for (const pt of sr.points) if (pt.v > maxV) maxV = pt.v;
     yMax = niceCeil(Math.max(20, maxV * 1.2));
   }
   const x = (t) => m.l + ((t - t0) / windowMs) * iw;
@@ -728,23 +752,31 @@ function closeJob() {
   loadHistory();
 }
 
+let detailBusyId = null;
+
 async function loadJobDetail() {
   clearTimeout(detailTimer);
   const jobId = state.jobDetailId;
   if (document.hidden || !jobId || currentRoute().tab !== "history") return;
+  if (detailBusyId === jobId) return; // 같은 job 요청이 진행 중이면 그 응답이 다음 주기를 건다
+  detailBusyId = jobId;
   try {
     await loadActions();
     const job = await api(`/api/jobs/${encodeURIComponent(jobId)}`);
-    if (state.jobDetailId !== jobId) return;
+    if (state.jobDetailId !== jobId) return; // 다른 job으로 이동한 뒤 도착한 응답
     renderJobDetail(job);
     if (job.status === "RUNNING" || Date.now() < state.reconcileUntil) detailTimer = setTimeout(loadJobDetail, JOB_POLL_MS);
   } catch (e) {
+    if (state.jobDetailId !== jobId) return; // 이전 job의 오류(404 등)가 새 job 화면을 덮지 않게
+    reportError("loadJobDetail", e);
     if (e.status === 404) {
       $("#job-detail").replaceChildren(h("p", { class: "error-text", text: "존재하지 않는 job입니다." }),
         h("a", { href: "#history", text: "← 목록" }));
       return;
     }
     detailTimer = setTimeout(loadJobDetail, JOB_POLL_MS);
+  } finally {
+    if (detailBusyId === jobId) detailBusyId = null;
   }
 }
 
@@ -878,6 +910,8 @@ async function retry(job) {
 // ------------------------------------------------------------------ 탭 4: 이벤트 (상태 전이 타임라인)
 
 let eventsTimer = null;
+let eventsGen = 0;       // 필터를 바꿀 때마다 증가. 이전 필터로 보낸 요청의 늦은 응답은 버린다
+let eventsBusyGen = -1;  // 진행 중인 요청의 세대 (같은 세대로 겹쳐 요청하지 않는다)
 
 function eventsQuery(extra) {
   const q = new URLSearchParams({ limit: String(EVENTS_PAGE) });
@@ -896,24 +930,34 @@ async function loadEvents() {
   clearTimeout(eventsTimer);
   if (document.hidden || currentRoute().tab !== "events") return;
   syncEventFilter();
+  const gen = eventsGen;
+  if (eventsBusyGen === gen) return; // 같은 필터로 진행 중인 요청이 끝나면 그쪽이 다음 주기를 건다
+  eventsBusyGen = gen;
   try {
     const rows = await api(eventsQuery());
+    if (gen !== eventsGen) return; // 필터가 바뀐 뒤 도착한 이전 필터의 응답
     // 처음 로드면 "더 보기" 가능 여부를 정한다. 이후 폴링은 새 이벤트만 합친다.
     if (!state.events.length) state.eventsHasMore = rows.length === EVENTS_PAGE;
     mergeEvents(rows);
     renderEvents();
   } catch (e) {
-    // 연결 끊김은 배너가 처리한다
+    reportError("loadEvents", e); // 연결 끊김은 배너가 처리한다
   } finally {
-    if (currentRoute().tab === "events") eventsTimer = setTimeout(loadEvents, EVENTS_POLL_MS);
+    if (eventsBusyGen === gen) eventsBusyGen = -1;
+    if (gen === eventsGen && currentRoute().tab === "events" && !document.hidden) {
+      clearTimeout(eventsTimer);
+      eventsTimer = setTimeout(loadEvents, EVENTS_POLL_MS);
+    }
   }
 }
 
 async function loadMoreEvents() {
   if (!state.events.length) return;
+  const gen = eventsGen;
   const oldest = state.events[state.events.length - 1].id;
   try {
     const rows = await api(eventsQuery({ before_id: oldest }));
+    if (gen !== eventsGen) return; // 필터가 바뀐 뒤 도착한 응답
     state.eventsHasMore = rows.length === EVENTS_PAGE;
     mergeEvents(rows);
     renderEvents();
@@ -1108,6 +1152,7 @@ async function init() {
   $("#event-node").addEventListener("change", (ev) => {
     state.eventsFilter = ev.target.value;
     state.events = [];
+    eventsGen += 1; // 이전 필터 요청의 응답은 이후 버려진다
     loadEvents();
   });
   $("#event-more").addEventListener("click", loadMoreEvents);
