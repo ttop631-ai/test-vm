@@ -7,7 +7,7 @@
 | **라이브 데모** | **http://TBD_EC2_PUBLIC_IP/** |
 | **계정** | 관리자 `admin` / `TBD_DEMO_PASSWORD`, 조회 전용 `monuser` / `TBD_MONITOR_PASSWORD` (접속하면 나오는 로그인 페이지에 입력) |
 | 운영 기간 | TBD ~ 평가 종료 시까지 |
-| 로컬 실행 | `docker compose up -d --build` → http://localhost:8080 (`admin` / `nodewatch`, 조회 전용 `monuser` / `monwatch`) |
+| 로컬 실행 | `docker compose up -d` → http://localhost:8080 (`admin` / `nodewatch`, 조회 전용 `monuser` / `monwatch`) |
 
 > 미기재 항목 확인: `grep -n TBD README.md history.md`
 
@@ -129,11 +129,12 @@ sequenceDiagram
 ```bash
 git clone https://github.com/ttop631-ai/test-vm.git nodewatch
 cd nodewatch
-docker compose up -d --build
+docker compose up -d       # 이미지가 없으면 자동으로 빌드한 뒤 기동한다
 docker compose ps          # 4개 컨테이너 healthy 확인
 ```
 
 - 접속: http://localhost:8080 — `admin` / `nodewatch`
+- 소스를 바꾼 뒤에는 `docker compose up -d --build`로 다시 빌드한다 (`up -d`만으로는 이미 있는 이미지를 그대로 쓴다).
 - `.env` 없이 기본값으로 동작한다. 값을 바꾸려면 `cp .env.example .env` 후 수정.
 - 종료: `docker compose down` (이력까지 삭제: `docker compose down -v`)
 - 기본 비밀번호(`nodewatch`, `monwatch`)로 기동하면 console 로그에 `event=default_password` 경고가 남는다. 외부 노출 전 `.env`에서 해시를 바꾼다.
@@ -145,22 +146,22 @@ docker compose ps          # 4개 컨테이너 healthy 확인
 
 ```bash
 unzip nodewatch-<커밋>.zip && cd nodewatch   # Windows는 압축을 푼 뒤 PowerShell에서 nodewatch 폴더로 이동
-docker compose up -d --build                  # 첫 빌드에서 베이스 이미지·패키지를 내려받는다 (인터넷 필요)
+docker compose up -d                          # 첫 실행은 자동 빌드 (베이스 이미지·패키지를 내려받으므로 인터넷 필요)
 ```
 
-- 8080 포트가 이미 쓰이고 있으면 `CONSOLE_PORT=18080 docker compose up -d --build` (PowerShell: `$env:CONSOLE_PORT=18080; docker compose up -d --build`).
+- 8080 포트가 이미 쓰이고 있으면 `CONSOLE_PORT=18080 docker compose up -d` (PowerShell: `$env:CONSOLE_PORT=18080; docker compose up -d`).
 
 ### 인터넷이 없는 곳 (이미지 묶음)
 
 빌드된 이미지 묶음(`nodewatch-images-<커밋>-amd64.tar.gz`)을 함께 가져가면 빌드 없이 실행한다. **x86_64(amd64) 전용**이다. ARM(Apple Silicon 등)에서는 인터넷이 되는 곳에서 위의 zip 절차로 빌드한다.
 
 ```bash
-docker load -i nodewatch-images-<커밋>-amd64.tar.gz   # nodewatch-console, nodewatch-node-a/b/c
+docker load -i nodewatch-images-<커밋>-amd64.tar.gz   # 한 번만. nodewatch-console, nodewatch-node-a/b/c
 cd nodewatch                                          # zip을 푼 폴더
-docker compose up -d --no-build
+docker compose up -d                                  # 불러온 이미지로 바로 기동 (빌드하지 않음)
 ```
 
-- compose는 프로젝트 이름(기본값은 폴더 이름 `nodewatch`)으로 이미지를 찾는다. 폴더 이름을 바꿨다면 `docker compose -p nodewatch up -d --no-build`처럼 프로젝트 이름을 지정한다.
+- compose는 프로젝트 이름(기본값은 폴더 이름 `nodewatch`)으로 이미지를 찾는다. 폴더 이름을 바꿨다면 `docker compose -p nodewatch up -d`처럼 프로젝트 이름을 지정한다. 이미지를 찾지 못하면 빌드를 시도하므로 인터넷이 없는 곳에서는 실패한다.
 
 개발·검증용:
 
