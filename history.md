@@ -276,6 +276,7 @@ docker compose logs | grep -c uvicorn.access → 0
 | S4 | `17aae59` → `d10f291` | 캡처 중 `resize`(innerWidth=1)에서 `<rect width=-5>` 생성 → 극단적으로 좁을 때 렌더 생략 | AI가 S5 브라우저 재검증의 JS 콘솔 오류를 계측해 원인 확인 |
 | 최종 점검 | `41314a7`(chaos 중계) → `3919fae` | chaos 중계가 agent의 401(토큰 설정 오류)을 그대로 전달 → 대시보드가 console 세션 만료로 해석해 관리자를 로그아웃시킴 → agent 401/403은 502로 변환. 함께: 보안 헤더(클릭재킹), 백그라운드 탭 폴링 중지, 로그인 실패 카운터 상한, `.dockerignore`, starlette 직접 의존성 고정 | AI가 배포 전 최종 코드 리뷰에서 발견 (응답 코드 경로 추적) |
 | 교차 검증 | `b279bd9` → `7f4ea1c`·`b7edb5a`·`04a314c` | 다른 도구(Codex)의 검증 보고 9개 항목을 회귀 테스트로 먼저 재현(console 30·agent 7 실패, 브라우저 경합 재현)한 뒤 수정. 로그인 차단 해제 경합, job 상태 역행, 설정·NaN 메트릭 검증, 대시보드 응답 역전·중복 요청, 대용량 차트 RangeError 등. 상세는 `docs/VALIDATION.md` | Codex 보고를 입력으로 AI가 재현·판정. 7번(명령 취소)은 도달 불가로 판정해 방어 조치로 분류 |
+| S5 | `e5193ff` → `e82e44c` | compose의 `env_file: [{path: .env, required: false}]`가 Compose v2.24+ 전용 문법이라 v2.18·v2.22·`docker-compose` 1.29.2에서 설정 오류로 기동 불가 → `environment:`의 `${VAR:-}` 보간으로 바꾸고 빈 값은 기본값(`MONITOR_USER`만 미설정=monuser, 빈 값=비활성). 호스트 v2.40, Docker 24 엔진(dind) 위 v2.18.1·`docker-compose` 1.29.2에서 이미지 없이 `up -d` 한 줄 기동 각 11/11 확인 | 배포 패키지(zip)를 만들며 '`docker compose up -d` 또는 `docker-compose up -d` 한 줄 기동' 요구를 구버전 Compose로 검증하다 AI가 발견 |
 | S5 | `41314a7` → `5a59dc0` | 로그인 페이지 도입 후, 로그아웃한 브라우저가 캐시된 `index.html`·`app.js`를 서버 확인 없이 띄우고 API 401 이후에야 로그인으로 이동 → 인증 응답에 `Cache-Control: no-store`. 로그인 후 원래 탭으로 복귀 | AI가 Playwright로 로그아웃 후 딥링크를 검증하다 발견 (응답 목록에 `/`가 서버 302 없이 200으로 찍힘) |
 
 ---
