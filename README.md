@@ -124,7 +124,7 @@ sequenceDiagram
 
 ## 4. 로컬 빌드 및 실행
 
-요구 사항: Docker 24+ 와 Docker Compose v2.24+ (`env_file`의 `required: false` 사용).
+요구 사항: Docker와 `docker compose`(Compose v2) 또는 `docker-compose`(v1.27+, v2). 아래의 `docker compose`는 `docker-compose`로 바꿔 써도 같다.
 
 ```bash
 git clone https://github.com/ttop631-ai/test-vm.git nodewatch
@@ -142,7 +142,7 @@ docker compose ps          # 4개 컨테이너 healthy 확인
 
 ### 다른 PC에서 실행 (zip)
 
-저장소 대신 zip으로 받았다면 압축을 풀고 같은 명령으로 실행한다. 필요한 것은 Docker와 Compose v2.24+뿐이다.
+저장소 대신 zip으로 받았다면 압축을 풀고 같은 명령으로 실행한다. 필요한 것은 Docker와 Compose(`docker compose` 또는 `docker-compose`)뿐이다. 한 줄로 console(백엔드 + 웹 화면)과 가상 노드 3개가 함께 뜨고, 브라우저로 http://localhost:8080 에 바로 접속한다.
 
 ```bash
 unzip nodewatch-<커밋>.zip && cd nodewatch   # Windows는 압축을 푼 뒤 PowerShell에서 nodewatch 폴더로 이동

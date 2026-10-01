@@ -56,3 +56,29 @@ def test_invalid_metric_rejected(value):
 @pytest.mark.parametrize("value", ["0", "100", "42.5"])
 def test_valid_metric_accepted(value):
     assert HealthPayload.model_validate_json(BASE % value).metrics.cpu_pct == float(value)
+
+
+# ---------------------------------------------------------------- compose 보간 (빈 env = 기본값)
+
+def test_empty_env_values_mean_default(monkeypatch):
+    """compose는 .env에 없는 변수를 ${VAR:-}로 빈 문자열을 넘긴다. 빈 값은 기본값이어야 한다 (SPEC §2.2)."""
+    for name in ("SLOW_MS", "POLL_INTERVAL_SEC", "ADMIN_USER", "ADMIN_PASSWORD_HASH", "COOKIE_SECURE",
+                 "SAMPLES_MAX", "CPU_WARN_PCT", "SESSION_TTL_SEC"):
+        monkeypatch.setenv(name, "")
+    s = Settings(_env_file=None)
+    assert (s.slow_ms, s.poll_interval_sec, s.admin_user, s.cookie_secure, s.samples_max) == (1500, 5.0, "admin", False, 60)
+    assert s.admin_password_hash.startswith("scrypt:") and s.cpu_warn_pct == 80 and s.session_ttl_sec == 28800
+
+
+def test_env_values_applied(monkeypatch):
+    monkeypatch.setenv("SAMPLES_MAX", "720")
+    monkeypatch.setenv("COOKIE_SECURE", "true")
+    s = Settings(_env_file=None)
+    assert s.samples_max == 720 and s.cookie_secure is True
+
+
+def test_monitor_user_unset_defaults_empty_disables(monkeypatch):
+    monkeypatch.delenv("MONITOR_USER", raising=False)
+    assert Settings(_env_file=None).monitor_user == "monuser"
+    monkeypatch.setenv("MONITOR_USER", "")
+    assert Settings(_env_file=None).monitor_user == ""   # 비활성

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings
@@ -56,6 +57,15 @@ class Settings(BaseSettings):
     mem_crit_pct: float = Field(default=95, ge=0, le=100)
     disk_warn_pct: float = Field(default=80, ge=0, le=100)
     disk_crit_pct: float = Field(default=90, ge=0, le=100)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _empty_means_default(cls, data: Any) -> Any:
+        # compose는 .env에 없는 변수를 ${VAR:-}로 빈 문자열을 넘긴다 (SPEC §2.2). 빈 값은 '설정 안 함'으로 보고
+        # 기본값을 쓴다. 단 MONITOR_USER는 빈 값이 '모니터링 계정 비활성'을 뜻하므로 그대로 둔다.
+        if isinstance(data, dict):
+            return {k: v for k, v in data.items() if not (v == "" and k != "monitor_user")}
+        return data
 
     @model_validator(mode="after")
     def _thresholds_ordered(self) -> Settings:

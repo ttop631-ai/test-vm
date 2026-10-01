@@ -31,15 +31,46 @@ services:
       - nodenet
     volumes:
       - nodewatch-data:/data
-    # .env의 계정(ADMIN_PASSWORD_HASH, MONITOR_* 등)과 튜닝 값(SPEC §5)을 console에 전달한다.
-    # .env가 없으면 console 기본값(로컬 개발용 비밀번호 해시)으로 기동하고 경고를 남긴다.
-    env_file:
-      - path: .env
-        required: false
+    # 설정은 모두 environment 보간으로 넘긴다: .env(또는 셸)에 있으면 그 값, 없으면 빈 값 = console 기본값.
+    # Compose 버전 전용 문법(v2.24+의 env_file required 등)을 쓰지 않아
+    # docker compose(v2)와 docker-compose(v1.27+, v2) 모두 'up -d' 한 줄로 기동한다 (SPEC §2.2).
+    # .env가 없으면 로컬 개발용 기본 비밀번호로 기동하고 경고를 남긴다.
     environment:
       AGENT_TOKEN_A: ${AGENT_TOKEN_A:-dev-token-a}
       AGENT_TOKEN_B: ${AGENT_TOKEN_B:-dev-token-b}
       AGENT_TOKEN_C: ${AGENT_TOKEN_C:-dev-token-c}
+      # 계정 (SPEC §2.2). 비밀번호는 해시만 받는다. 평문 *_PASSWORD도 넘겨야 console이 감지해 기동을 거부한다.
+      ADMIN_USER: ${ADMIN_USER:-}
+      ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:-}
+      MONITOR_USER: ${MONITOR_USER-monuser}   # 미설정이면 monuser, 빈 값이면 비활성
+      MONITOR_PASSWORD_HASH: ${MONITOR_PASSWORD_HASH:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      MONITOR_PASSWORD: ${MONITOR_PASSWORD:-}
+      SESSION_TTL_SEC: ${SESSION_TTL_SEC:-}
+      COOKIE_SECURE: ${COOKIE_SECURE:-}
+      LOGIN_MAX_FAILURES: ${LOGIN_MAX_FAILURES:-}
+      LOGIN_LOCKOUT_SEC: ${LOGIN_LOCKOUT_SEC:-}
+      # 튜닝 (SPEC §4.3, §5)
+      POLL_INTERVAL_SEC: ${POLL_INTERVAL_SEC:-}
+      HEALTH_CONNECT_TIMEOUT: ${HEALTH_CONNECT_TIMEOUT:-}
+      HEALTH_READ_TIMEOUT: ${HEALTH_READ_TIMEOUT:-}
+      SLOW_MS: ${SLOW_MS:-}
+      POLL_CONCURRENCY: ${POLL_CONCURRENCY:-}
+      FAIL_THRESHOLD: ${FAIL_THRESHOLD:-}
+      STALE_FACTOR: ${STALE_FACTOR:-}
+      HTTP_KEEPALIVE_EXPIRY: ${HTTP_KEEPALIVE_EXPIRY:-}
+      CMD_CONNECT_TIMEOUT: ${CMD_CONNECT_TIMEOUT:-}
+      CMD_READ_TIMEOUT: ${CMD_READ_TIMEOUT:-}
+      JOB_CONCURRENCY: ${JOB_CONCURRENCY:-}
+      OUTPUT_MAX_BYTES: ${OUTPUT_MAX_BYTES:-}
+      SAMPLES_MAX: ${SAMPLES_MAX:-}
+      EVENTS_RETENTION_DAYS: ${EVENTS_RETENTION_DAYS:-}
+      CPU_WARN_PCT: ${CPU_WARN_PCT:-}
+      CPU_CRIT_PCT: ${CPU_CRIT_PCT:-}
+      MEM_WARN_PCT: ${MEM_WARN_PCT:-}
+      MEM_CRIT_PCT: ${MEM_CRIT_PCT:-}
+      DISK_WARN_PCT: ${DISK_WARN_PCT:-}
+      DISK_CRIT_PCT: ${DISK_CRIT_PCT:-}
     healthcheck:
       test: ["CMD", "python", "-c", "import os, urllib.request; urllib.request.urlopen('http://localhost:%s/healthz' % os.environ.get('LISTEN_PORT', '8000'), timeout=2)"]
       interval: 10s
