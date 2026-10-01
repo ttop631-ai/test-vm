@@ -139,6 +139,29 @@ docker compose ps          # 4개 컨테이너 healthy 확인
 - 기본 비밀번호(`nodewatch`, `monwatch`)로 기동하면 console 로그에 `event=default_password` 경고가 남는다. 외부 노출 전 `.env`에서 해시를 바꾼다.
 - 비밀번호는 **scrypt 해시로만** 넣는다. 해시 생성: `docker compose run --rm console python -m app.auth hash` (입력한 비밀번호의 해시를 출력). 평문 `ADMIN_PASSWORD`가 있으면 console이 기동을 거부한다.
 
+### 다른 PC에서 실행 (zip)
+
+저장소 대신 zip으로 받았다면 압축을 풀고 같은 명령으로 실행한다. 필요한 것은 Docker와 Compose v2.24+뿐이다.
+
+```bash
+unzip nodewatch-<커밋>.zip && cd nodewatch   # Windows는 압축을 푼 뒤 PowerShell에서 nodewatch 폴더로 이동
+docker compose up -d --build                  # 첫 빌드에서 베이스 이미지·패키지를 내려받는다 (인터넷 필요)
+```
+
+- 8080 포트가 이미 쓰이고 있으면 `CONSOLE_PORT=18080 docker compose up -d --build` (PowerShell: `$env:CONSOLE_PORT=18080; docker compose up -d --build`).
+
+### 인터넷이 없는 곳 (이미지 묶음)
+
+빌드된 이미지 묶음(`nodewatch-images-<커밋>-amd64.tar.gz`)을 함께 가져가면 빌드 없이 실행한다. **x86_64(amd64) 전용**이다. ARM(Apple Silicon 등)에서는 인터넷이 되는 곳에서 위의 zip 절차로 빌드한다.
+
+```bash
+docker load -i nodewatch-images-<커밋>-amd64.tar.gz   # nodewatch-console, nodewatch-node-a/b/c
+cd nodewatch                                          # zip을 푼 폴더
+docker compose up -d --no-build
+```
+
+- compose는 프로젝트 이름(기본값은 폴더 이름 `nodewatch`)으로 이미지를 찾는다. 폴더 이름을 바꿨다면 `docker compose -p nodewatch up -d --no-build`처럼 프로젝트 이름을 지정한다.
+
 개발·검증용:
 
 ```bash
