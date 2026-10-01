@@ -53,6 +53,9 @@
 
 compose 파일에 `${VAR:-default}`로 기본값을 두어 `.env` 없이도 `docker compose up`이 동작해야 한다.
 
+- 코드를 받은 루트 디렉터리에서 **`docker compose up -d`(Compose v2) 또는 `docker-compose up -d`(standalone, v1.27+ / v2) 한 줄**로 console(백엔드 + 정적 프론트엔드)과 node-a/b/c가 함께 기동하고 `http://localhost:${CONSOLE_PORT:-8080}`으로 바로 접속할 수 있어야 한다. 이미지가 없으면 `up`이 빌드한다.
+- 그래서 특정 Compose 버전에만 있는 문법(예: v2.24+의 `env_file: [{path, required: false}]`)을 쓰지 않는다. console 설정은 `environment:`에서 `${VAR:-}` 보간으로 넘기고, **빈 값은 '설정 안 함(기본값 사용)'**으로 처리한다. 예외: `MONITOR_USER`는 `${MONITOR_USER-monuser}`로 넘겨 미설정이면 `monuser`, 빈 값이면 계정 비활성.
+
 | 변수 | 기본값 | 용도 |
 |---|---|---|
 | `CONSOLE_PORT` | `8080` | 호스트 노출 포트 (AWS 데모는 `80`) |
@@ -513,6 +516,7 @@ CREATE INDEX IF NOT EXISTS idx_node_events_node ON node_events(node_id, id DESC)
 | `mem_limit` | console 256m, agent 96m | 1GB 인스턴스에서 OOM 격리 |
 | volume | `nodewatch-data:/data` | job 이력 보존 |
 | 시간대 | 컨테이너 TZ 설정 불필요 | UTC 저장, 브라우저에서 변환 |
+| Compose 호환 | `docker compose`(v2) · `docker-compose`(v1.27+, v2) | 버전 전용 문법 금지. 설정은 `environment:` + `${VAR:-}` 보간 (§2.2) |
 
 ---
 
